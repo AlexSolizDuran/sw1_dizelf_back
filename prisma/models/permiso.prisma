@@ -1,0 +1,9 @@
+model Permiso {
+    id     Int    @id @default(autoincrement()) @map("permiso_id")
+    nombre String @db.VarChar(100) @map("nombre_permiso")
+
+    // Campo virtual inverso: no genera columna.
+    colaboradores Colaborador[]
+
+    @@map("permiso")
+}

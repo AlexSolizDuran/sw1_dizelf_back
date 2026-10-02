@@ -1,0 +1,11 @@
+model Persona {
+    id       Int    @id @default(autoincrement()) @map("persona_id")
+    nombre   String @db.VarChar(80) @map("nombre_persona")
+    apellido String @db.VarChar(80) @map("apellido_persona")
+    gmail    String @unique @db.VarChar(80)
+
+    // Relación 1:1 inversa. Campo virtual: no genera columna.
+    usuario Usuario?
+
+    @@map("persona")
+}

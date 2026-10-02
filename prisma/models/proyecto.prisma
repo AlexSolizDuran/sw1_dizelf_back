@@ -1,0 +1,17 @@
+model Proyecto {
+    id           String @id @default(uuid()) @db.Uuid @map("proyecto_id")
+    nombre       String @db.VarChar(100) @map("nombre_proyecto")
+    esquemaJson  Json   @db.JsonB @map("esquema_json")
+
+    // Relación 1:N: un usuario crea muchos proyectos.
+    creadorId Int     @map("usuario_id")
+    creador   Usuario @relation(fields: [creadorId], references: [id], onDelete: Cascade)
+
+    // Campos virtuales inversos: no generan columna.
+    versiones Version[]
+    colaboradores Colaborador[]
+    documentos    DocumentoColaborativo[]
+
+    @@index([nombre])
+    @@map("proyecto")
+}

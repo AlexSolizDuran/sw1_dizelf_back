@@ -1,0 +1,12 @@
+model Version {
+    id        Int      @id @default(autoincrement()) @map("version_id")
+    esquemaJson Json    @db.JsonB @map("esquema_json_version")
+    fecha     DateTime @default(now()) @db.Timestamp(3) @map("fecha_version")
+
+    // Relación 1:N: un proyecto tiene muchas versiones.
+    proyectoId String   @db.Uuid @map("proyecto_id")
+    proyecto   Proyecto @relation(fields: [proyectoId], references: [id], onDelete: Cascade)
+
+    @@index([fecha])
+    @@map("version")
+}
