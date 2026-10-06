@@ -1,6 +1,6 @@
 ---
 name: nestjs-standards
-description: "Use when creating, modifying, refactoring, or reviewing NestJS and TypeScript code. Enforces mandatory coding standards - naming conventions (kebab-case files, PascalCase classes, camelCase members), strict TypeScript (no `any`), DTOs with class-validator validation, NestJS exception-based error handling, security rules, modular architecture by feature, database/pagination/transactions, testing, and software quality factors (correctness, efficiency, reliability, usability, maintainability/scalability, security/integrity, portability). Identifiers are written in the language of the conversation (Spanish). Front-load keywords like `usuario.repository.ts`, `CrearUsuarioDto`, `ValidationPipe`, `NotFoundException`, `nestjs`."
+description: "Use when creating, modifying, refactoring, or reviewing NestJS and TypeScript code. Enforces mandatory coding standards - naming conventions (kebab-case files, PascalCase classes, camelCase members), strict TypeScript (no `any`), Entities, DTOs with class-validator validation, NestJS exception-based error handling, security rules, modular architecture by feature, database/pagination/transactions, testing, and software quality factors (correctness, efficiency, reliability, usability, maintainability/scalability, security/integrity, portability). Identifiers are written in the language of the conversation (Spanish). Front-load keywords like `usuario.entity.ts`, `UsuarioEntity`, `usuario.repository.ts`, `CrearUsuarioDto`, `ValidationPipe`, `NotFoundException`, `nestjs`."
 ---
 
 # NestJS Coding Standards
@@ -70,9 +70,9 @@ Each feature encapsulates its controllers, services, DTOs, repositories, guards,
 ## 6. Layers
 
 - **Controllers** are thin: routing, params, DTOs, call services, return responses. No business logic, complex queries, or password hashing.
-- **Services** hold application/business logic. Keep responsibilities focused (no "God Services"); extract concerns when too large.
-- **DTOs** for all external structured input (body, query, params). Never use DB entities as request DTOs.
-- **DB access** isolated behind repositories/persistence services; controllers must never touch the DB directly.
+- **Services** hold application/business logic. Keep responsibilities focused (no "God Services"); extract concerns when too large. Services work with Entities, never with raw Prisma results or plain `any`/untyped objects.
+- **DTOs** for all external structured input (body, query, params) and for all responses. Never use Entities (DB/domain) as request DTOs. Never return Entities directly from controllers — always map `Entity -> Response DTO` (via mapper/factory or explicit `desdeEntidad()`/`aRespuesta()` method).
+- **DB access** isolated behind repositories/persistence services; controllers must never touch the DB directly. Repositories receive and return Entities, never DTOs.
 
 ## 7. Validation
 
@@ -163,7 +163,7 @@ The frontend (skill `nextjs-frontend-standards`) relies on this contract. Do not
 - Correct module/layer; no circular deps; business logic outside controllers.
 - Naming: kebab-case files, PascalCase classes, camelCase members, identifiers in the project language (Spanish), descriptive names.
 - TS strict, no `any`, no unsafe assertions, public APIs typed.
-- DTOs used, external input validated.
+- Entity exists (`*.entity.ts`) and is used in service/repository; DTOs used, external input validated; Entity never used as request DTO nor returned directly by controller.
 - No secrets, no sensitive logging, authorization enforced, sensitive fields not exposed.
 - Queries efficient, pagination where needed, no obvious N+1, transactions where required.
 - New behavior has tests; relevant tests/lint pass; no dead code or unrelated changes.
