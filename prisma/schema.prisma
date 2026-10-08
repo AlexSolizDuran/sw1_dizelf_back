@@ -1,9 +1,9 @@
 generator client {
-    provider = "prisma-client-js"
+  provider = "prisma-client-js"
 }
 
 datasource db {
-    provider = "postgresql"
-    url = env("NEON_DB_URL") //tu .env
+  provider  = "postgresql"
+  url       = env("NEON_DB_URL") // Conexión agrupada (pooler) usada en runtime
+  directUrl = env("NEON_DIRECT_URL") // Conexión directa requerida por las migraciones
 }
-

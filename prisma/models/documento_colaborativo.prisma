@@ -1,10 +1,10 @@
 model DocumentoColaborativo {
-    id           Int    @id @default(autoincrement()) @map("doc_colab_id")
-    esquemaJson  Json   @db.JsonB @map("esquema_json_temp")
+  id          Int  @id @default(autoincrement()) @map("doc_colab_id")
+  esquemaJson Json @map("esquema_json_temp") @db.JsonB
 
-    // Relación de composición: el documento no existe sin su proyecto.
-    proyectoId String   @db.Uuid @map("proyecto_id")
-    proyecto   Proyecto @relation(fields: [proyectoId], references: [id], onDelete: Cascade)
+  // Relación de composición: el documento no existe sin su proyecto.
+  proyectoId String   @map("proyecto_id") @db.Uuid
+  proyecto   Proyecto @relation(fields: [proyectoId], references: [id], onDelete: Cascade)
 
-    @@map("documento_colaborativo")
+  @@map("documento_colaborativo")
 }
