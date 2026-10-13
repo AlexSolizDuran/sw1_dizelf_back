@@ -1,15 +1,14 @@
 model Colaborador {
-    id     Int    @id @default(autoincrement()) @map("colaborador_id")
-    proyectoId String @db.Uuid @map("proyecto_id")
-    usuarioId  Int    @map("usuario_id")
-    permisoId  Int    @map("permiso_id")
+  id         Int    @id @default(autoincrement()) @map("colaborador_id")
+  proyectoId String @map("proyecto_id") @db.Uuid
+  usuarioId  Int    @map("usuario_id")
+  permisoId  Int    @map("permiso_id")
 
-    proyecto Proyecto @relation(fields: [proyectoId], references: [id], onDelete: Cascade)
-    usuario  Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
-    permiso  Permiso  @relation(fields: [permisoId], references: [id], onDelete: Cascade)
+  proyecto Proyecto @relation(fields: [proyectoId], references: [id], onDelete: Cascade)
+  usuario  Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  permiso  Permiso  @relation(fields: [permisoId], references: [id], onDelete: Cascade)
 
-    // Impide invitar dos veces al mismo usuario al mismo proyecto.
-    @@unique([proyectoId, usuarioId])
-
-    @@map("colaborador")
+  // Impide invitar dos veces al mismo usuario al mismo proyecto.
+  @@unique([proyectoId, usuarioId])
+  @@map("colaborador")
 }
