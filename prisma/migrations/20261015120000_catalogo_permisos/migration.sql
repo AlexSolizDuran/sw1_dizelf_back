@@ -12,60 +12,105 @@
 -- 3. `documento_colaborativo` deja de ser scratch (`esquema_json_temp`) y pasa a
 --    ser el documento vivo del plano, 1:1 con el proyecto.
 --
--- Cada paso va antes de su restricción: la unicidad sobre `permiso.nombre` y
--- sobre `documento_colaborativo.proyecto_id` falla si quedan duplicados, y la
--- columna renombrada tiene que existir antes de poder fullestarse.
-
--- ─────────────────────────────────────────────────────────────────────────────
--- 1. Deduplicar permiso antes del índice único
--- ─────────────────────────────────────────────────────────────────────────────
-DELETE FROM "permiso" a
-USING "permiso" b
-WHERE a."nombre_permiso" = b."nombre_permiso"
-  AND a."permiso_id" > b."permiso_id";
-
--- ─────────────────────────────────────────────────────────────────────────────
--- 2. Rutas de datos: INVITADO y CREADOR pasan a EDITOR
+-- EL ORDEN DE ESTOS PASOS IMPORTABA, Y POR MAL LA PRIMERA VEZ
+-- -----------------------------------------------------------
+-- El orden correcto es renombrar → re-apuntar → borrar duplicados → unique.
 --
--- Se hace ANTES de crear EDITOR para no chocar con el índice único: si
--- existiera ya una fila EDITOR, el UPDATE no podría dejar dos filas iguales.
+-- Deduplicar antes de renombrar NO alcanza: el rename convierte N filas
+-- distintas en N filas con el mismo nombre, y el índice único revienta. Pasa
+-- siempre que haya un INVITADO y un CREADOR, que es el estado de cualquier base
+-- donde ya corrió el seed viejo.
+--
+-- Y borrar una fila de `permiso` NO es inocuo: `colaborador.permiso_id` está
+-- declarado con `ON DELETE CASCADE`, así que eliminar un duplicado se lleva por
+-- delante a todos los colaboradores asignados a esa fila. Por eso antes de
+-- borrar hay que mover esas referencias al permiso que sobrevive.
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 1. Renombrar a EDITOR
+--
+-- Crea duplicados a propósito; se resuelven en los pasos siguientes.
 -- ─────────────────────────────────────────────────────────────────────────────
 UPDATE "permiso" SET "nombre_permiso" = 'EDITOR'
 WHERE "nombre_permiso" IN ('INVITADO', 'CREADOR');
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- 3. Sembrar el catálogo
+-- 2. Re-apuntar los colaboradores al permiso que sobrevive
+--
+-- Para cada nombre duplicado, gana el `permiso_id` más bajo. Sin este paso, el
+-- DELETE de abajo dispararía el CASCADE y perdería las asignaciones.
+-- ─────────────────────────────────────────────────────────────────────────────
+UPDATE "colaborador" AS c
+SET "permiso_id" = (
+  SELECT MIN(p2."permiso_id")
+  FROM "permiso" AS p2
+  WHERE p2."nombre_permiso" = p."nombre_permiso"
+)
+FROM "permiso" AS p
+WHERE c."permiso_id" = p."permiso_id"
+  AND c."permiso_id" <> (
+    SELECT MIN(p3."permiso_id")
+    FROM "permiso" AS p3
+    WHERE p3."nombre_permiso" = p."nombre_permiso"
+  );
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 3. Borrar los duplicados
+--
+-- Ya no tienen referencias: el paso anterior las movió todas.
+-- ─────────────────────────────────────────────────────────────────────────────
+DELETE FROM "permiso" AS a
+USING "permiso" AS b
+WHERE a."nombre_permiso" = b."nombre_permiso"
+  AND a."permiso_id" > b."permiso_id";
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 4. Unicidad del catálogo
+--
+-- Antes del INSERT, y no después: `ON CONFLICT DO NOTHING` sin un conflicto que
+-- observar no deduplica nada. Con la restricción todavía sin existir, el INSERT de
+-- EDITOR crea una fila nueva y el ADD CONSTRAINT posterior falla con "duplicate
+-- key". El orden correcto es poner la restricción primero.
+-- ─────────────────────────────────────────────────────────────────────────────
+ALTER TABLE "permiso" ADD CONSTRAINT "permiso_nombre_permiso_key"
+  UNIQUE ("nombre_permiso");
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 5. Catálogo
+--
+-- EDITOR ya existe desde el paso 1 (INVITADO y CREADOR renombrados); LECTOR se
+-- agrega. El seed también siembra y es idempotente.
 -- ─────────────────────────────────────────────────────────────────────────────
 INSERT INTO "permiso" ("nombre_permiso")
 VALUES ('EDITOR'), ('LECTOR')
 ON CONFLICT DO NOTHING;
 
-ALTER TABLE "permiso" ADD CONSTRAINT "permiso_nombre_permiso_key"
-  UNIQUE ("nombre_permiso");
-
 -- ─────────────────────────────────────────────────────────────────────────────
--- 4. documento_colaborativo: renombrar la columna, conservando los datos
+-- 6. documento_colaborativo: renombrar conservando los datos
 -- ─────────────────────────────────────────────────────────────────────────────
 ALTER TABLE "documento_colaborativo"
   RENAME COLUMN "esquema_json_temp" TO "esquema_json";
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- 5. Deduplicar por proyecto antes del índice único
+-- 7. Deduplicar por proyecto
 --
--- Sin esto el índice falla: la tabla nunca tuvo restricción y nada impedía
--- tener dos documentos vivos para el mismo proyecto. Se conserva el más
--- reciente, que es el que el editor estaría mostrando.
+-- Sin esto el índice único falla: la tabla nunca tuvo restricción y nada
+-- impedía tener dos documentos vivos para el mismo proyecto. Se conserva el de
+-- `doc_colab_id` más alto, que es el último escrito y por lo tanto el que el
+-- editor estaría mostrando. Acá no hay riesgo de CASCADE: nada apunta a esta
+-- tabla.
 -- ─────────────────────────────────────────────────────────────────────────────
-DELETE FROM "documento_colaborativo" a
-USING "documento_colaborativo" b
+DELETE FROM "documento_colaborativo" AS a
+USING "documento_colaborativo" AS b
 WHERE a."proyecto_id" = b."proyecto_id"
   AND a."doc_colab_id" < b."doc_colab_id";
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- 6. Columnas nuevas
+-- 8. Columnas nuevas
 --
--- `actualizado_en` se agrega con DEFAULT now() para poder_NOT NULL sobre filas
--- existentes; Prisma lo administra por su cuenta vía `@updatedAt`.
+-- `actualizado_en` se agrega con DEFAULT now() para poder ponerlo NOT NULL
+-- sobre filas existentes; el default se saca después porque Prisma lo gestiona
+-- por su cuenta vía `@updatedAt`.
 -- ─────────────────────────────────────────────────────────────────────────────
 ALTER TABLE "documento_colaborativo"
   ADD COLUMN "actualizado_en" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -75,7 +120,7 @@ ALTER TABLE "documento_colaborativo"
   ALTER COLUMN "actualizado_en" DROP DEFAULT;
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- 7. Unicidad e índices
+-- 9. Unicidad e índices
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE UNIQUE INDEX "documento_colaborativo_proyecto_id_key"
   ON "documento_colaborativo"("proyecto_id");
