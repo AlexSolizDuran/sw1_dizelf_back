@@ -23,7 +23,8 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "./e2e/run.sh",
-    "test:e2e:ui": "E2E_PORT=3098 ./e2e/run.sh"
+    "test:e2e:ui": "E2E_PORT=3098 ./e2e/run.sh",
+    "test:navegador": "node e2e/navegador.e2e.js"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
@@ -62,6 +63,7 @@
     "eslint-plugin-prettier": "^5.2.2",
     "globals": "^17.0.0",
     "jest": "^30.0.0",
+    "playwright": "^1.64.1",
     "prettier": "^3.4.2",
     "prisma": "^6.19.3",
     "socket.io-client": "^4.8.4",
