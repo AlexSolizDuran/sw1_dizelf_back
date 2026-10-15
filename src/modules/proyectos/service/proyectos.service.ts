@@ -6,6 +6,10 @@ import {
 } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import {
+  CAPACIDADES_CREADOR,
+  capacidadesDe,
+} from '../../../common/capacidades/capacidades-proyecto';
 import { ActualizarProyectoDto } from '../dto/proyecto/actualizar-proyecto.dto';
 import { ConsultarProyectosDto } from '../dto/proyecto/consultar-proyectos.dto';
 import { CrearProyectoDto } from '../dto/proyecto/crear-proyecto.dto';
@@ -13,8 +17,19 @@ import {
   ProyectoListaDto,
   ProyectosPaginadosDto,
 } from '../dto/proyecto/proyecto-lista.dto';
-import { ProyectoRespuestaDto } from '../dto/proyecto/proyecto-respuesta.dto';
-import { RolProyecto } from '../enums/rol-proyecto.enum';
+import {
+  ProyectoRespuestaDto,
+  type OrigenDocumento,
+} from '../dto/proyecto/proyecto-respuesta.dto';
+import { VersionRespuestaDto } from '../dto/proyecto/version-respuesta.dto';
+
+/**
+ * Estado que devuelve el guard en la solicitud.
+ *
+ * El guard ya resolvió la membresía contra la base; repetirla acá sería una
+ * consulta de más por request.
+ */
+type Miembro = { rol: string; puedeEditar: boolean };
 
 type ProyectoBase = {
   id: string;
@@ -57,7 +72,13 @@ export class ProyectosService {
       `Proyecto creado: ${proyecto.id} por usuario ${creadorId}.`,
     );
 
-    return this.mapearRespuesta(proyecto, RolProyecto.CREADOR, 0);
+    return this.mapearRespuesta(
+      { ...proyecto, esquemaJson: proyecto.esquemaJson },
+      { rol: 'CREADOR', ...CAPACIDADES_CREADOR },
+      0,
+      proyecto.esquemaJson,
+      'PROYECTO',
+    );
   }
 
   async listarParaUsuario(
@@ -87,7 +108,7 @@ export class ProyectosService {
           creadorId: true,
           colaboradores: {
             where: { usuarioId },
-            select: { usuarioId: true },
+            select: { permiso: { select: { nombre: true } } },
           },
           _count: { select: { colaboradores: true } },
         },
@@ -95,7 +116,10 @@ export class ProyectosService {
     ]);
 
     const datos: ProyectoListaDto[] = proyectos.map((proyecto) => {
-      const rol = this.resolverRol(proyecto, usuarioId);
+      const rol = this.rolDe(
+        proyecto.creadorId === usuarioId,
+        proyecto.colaboradores[0]?.permiso?.nombre,
+      );
       if (!rol) {
         throw new ForbiddenException(
           'Acceso denegado: No es miembro de este proyecto.',
@@ -107,6 +131,14 @@ export class ProyectosService {
     return { datos, total, pagina, limite };
   }
 
+  /**
+   * Detalle del proyecto para un miembro.
+   *
+   * Devuelve el documento vivo si existe: `documento_colaborativo` gana sobre
+   * `proyecto.esquema_json`, que queda como el último guardado consolidado. El
+   * campo `origen` le dice al frontend de dónde salió, para que el autosave
+   * escriba en la fila correcta en vez de pisar el proyecto.
+   */
   async obtenerParaMiembro(
     proyectoId: string,
     usuarioId: number,
@@ -120,8 +152,10 @@ export class ProyectosService {
         creadorId: true,
         colaboradores: {
           where: { usuarioId },
-          select: { usuarioId: true },
+          select: { permiso: { select: { nombre: true } } },
+          take: 1,
         },
+        documentos: { select: { esquemaJson: true }, take: 1 },
         _count: { select: { colaboradores: true } },
       },
     });
@@ -132,16 +166,37 @@ export class ProyectosService {
       );
     }
 
-    const rol = this.resolverRol(proyecto, usuarioId);
+    const rol = this.rolDe(
+      proyecto.creadorId === usuarioId,
+      proyecto.colaboradores[0]?.permiso?.nombre,
+    );
     if (!rol) {
       throw new ForbiddenException(
         'Acceso denegado: No es miembro de este proyecto.',
       );
     }
 
-    return this.mapearRespuesta(proyecto, rol, proyecto._count.colaboradores);
+    const documentoVivo = proyecto.documentos[0]?.esquemaJson;
+
+    return this.mapearRespuesta(
+      proyecto,
+      rol,
+      proyecto._count.colaboradores,
+      documentoVivo ?? proyecto.esquemaJson,
+      documentoVivo ? 'COLABORATIVO' : 'PROYECTO',
+    );
   }
 
+  /**
+   * Escritura del autosave (el editor llama ~1 vez por segundo).
+   *
+   * `esquemaJson` va al documento vivo, NO al proyecto. El proyecto solo se
+   * toca en `guardarVersion`, que es el guardado manual: ahí se crea la fila en
+   * `version` y se consolida `proyecto.esquema_json`.
+   *
+   * `upsert` porque el documento vivo se crea con la primera edición: hasta
+   * entonces el editor abre siempre el documento del proyecto.
+   */
   async actualizarParaMiembro(
     proyectoId: string,
     usuarioId: number,
@@ -149,38 +204,152 @@ export class ProyectosService {
   ): Promise<ProyectoRespuestaDto> {
     await this.obtenerParaMiembro(proyectoId, usuarioId);
 
-    const proyecto = await this.prisma.proyecto.update({
-      where: { id: proyectoId },
-      data: {
-        ...(dto.nombre !== undefined ? { nombre: dto.nombre.trim() } : {}),
-        ...(dto.esquemaJson !== undefined
-          ? {
-              esquemaJson: dto.esquemaJson as unknown as Prisma.InputJsonValue,
-            }
-          : {}),
-      },
-      select: {
-        id: true,
-        nombre: true,
-        esquemaJson: true,
-        creadorId: true,
-      },
-    });
+    if (dto.esquemaJson !== undefined) {
+      await this.prisma.documentoColaborativo.upsert({
+        where: { proyectoId },
+        create: {
+          proyectoId,
+          usuarioId,
+          esquemaJson: dto.esquemaJson as unknown as Prisma.InputJsonValue,
+        },
+        update: {
+          usuarioId,
+          esquemaJson: dto.esquemaJson as unknown as Prisma.InputJsonValue,
+        },
+      });
+    }
 
-    const rol =
-      proyecto.creadorId === usuarioId
-        ? RolProyecto.CREADOR
-        : RolProyecto.INVITADO;
-
-    const totalColaboradores = await this.prisma.colaborador.count({
-      where: { proyectoId },
-    });
+    // El nombre sí sigue siendo del proyecto: no es del documento vivo.
+    if (dto.nombre !== undefined) {
+      await this.prisma.proyecto.update({
+        where: { id: proyectoId },
+        data: { nombre: dto.nombre.trim() },
+      });
+    }
 
     this.logger.log(
-      `Proyecto ${proyectoId} actualizado por usuario ${usuarioId} (rol ${rol}).`,
+      `Documento de ${proyectoId} actualizado por usuario ${usuarioId}.`,
     );
 
-    return this.mapearRespuesta(proyecto, rol, totalColaboradores);
+    return this.obtenerParaMiembro(proyectoId, usuarioId);
+  }
+
+  /**
+   * Guardado manual: consolida.
+   *
+   * Crea una fila en `version` con el documento vigente y actualiza
+   * `proyecto.esquema_json` con el mismo contenido. A partir de acá el proyecto
+   * queda respaldado: si se pierde la fila de `documento_colaborativo`, se
+   * recupera desde la última versión guardada.
+   *
+   * @param nombre Etiqueta opcional para reconocer la versión en el historial.
+   */
+  async guardarVersion(
+    proyectoId: string,
+    usuarioId: number,
+    nombre?: string,
+  ): Promise<VersionRespuestaDto> {
+    await this.obtenerParaMiembro(proyectoId, usuarioId);
+
+    const proyecto = await this.prisma.proyecto.findUniqueOrThrow({
+      where: { id: proyectoId },
+      select: { esquemaJson: true },
+    });
+
+    const vigente = await this.prisma.documentoColaborativo.findUnique({
+      where: { proyectoId },
+      select: { esquemaJson: true },
+    });
+
+    // Sin documento vivo se versiona el proyecto: es el único estado que hay.
+    const contenido = vigente?.esquemaJson ?? proyecto.esquemaJson;
+
+    const [version] = await this.prisma.$transaction([
+      this.prisma.version.create({
+        data: {
+          proyectoId,
+          esquemaJson: contenido as unknown as Prisma.InputJsonValue,
+        },
+        select: { id: true, fecha: true },
+      }),
+      this.prisma.proyecto.update({
+        where: { id: proyectoId },
+        data: { esquemaJson: contenido as unknown as Prisma.InputJsonValue },
+      }),
+    ]);
+
+    this.logger.log(
+      `Versión ${version.id} del proyecto ${proyectoId} guardada por ${usuarioId}${nombre ? ` («${nombre}»)` : ''}.`,
+    );
+
+    return { id: version.id, fecha: version.fecha, nombre: nombre ?? null };
+  }
+
+  /**
+   * Historial del proyecto, del más nuevo al más viejo.
+   *
+   * Se apoya en `version_fecha_version_idx`, que ya existe en el esquema.
+   * No trae el `esquemaJson`: el historial son decenas de escenas completas y
+   * listarlas completas sería pesado. El contenido se pide de a uno.
+   */
+  async listarVersiones(
+    proyectoId: string,
+    usuarioId: number,
+    limite = 20,
+  ): Promise<VersionRespuestaDto[]> {
+    await this.obtenerParaMiembro(proyectoId, usuarioId);
+
+    const versiones = await this.prisma.version.findMany({
+      where: { proyectoId },
+      orderBy: { fecha: 'desc' },
+      take: limite,
+      select: { id: true, fecha: true },
+    });
+
+    return versiones.map((v) => ({ id: v.id, fecha: v.fecha, nombre: null }));
+  }
+
+  /**
+   * Restaura una versión: escribe su contenido en el documento vivo y consolida
+   * el proyecto. Queda un nuevo guardado manual, no un borrado del historial.
+   */
+  async restaurarVersion(
+    proyectoId: string,
+    usuarioId: number,
+    versionId: number,
+  ): Promise<ProyectoRespuestaDto> {
+    await this.obtenerParaMiembro(proyectoId, usuarioId);
+
+    const version = await this.prisma.version.findFirst({
+      where: { id: versionId, proyectoId },
+      select: { id: true, esquemaJson: true },
+    });
+
+    if (!version) {
+      throw new NotFoundException(
+        `La versión ${versionId} no pertenece al proyecto ${proyectoId}.`,
+      );
+    }
+
+    const contenido = version.esquemaJson as unknown as Prisma.InputJsonValue;
+
+    await this.prisma.$transaction([
+      this.prisma.documentoColaborativo.upsert({
+        where: { proyectoId },
+        create: { proyectoId, usuarioId, esquemaJson: contenido },
+        update: { usuarioId, esquemaJson: contenido },
+      }),
+      this.prisma.proyecto.update({
+        where: { id: proyectoId },
+        data: { esquemaJson: contenido },
+      }),
+    ]);
+
+    this.logger.log(
+      `Versión ${versionId} del proyecto ${proyectoId} restaurada por ${usuarioId}.`,
+    );
+
+    return this.obtenerParaMiembro(proyectoId, usuarioId);
   }
 
   async eliminarComoCreador(
@@ -203,7 +372,7 @@ export class ProyectosService {
         `Eliminación denegada: usuario ${usuarioId} no es creador del proyecto ${proyectoId}.`,
       );
       throw new ForbiddenException(
-        'Acceso denegado: Solo el usuario con rol CREADOR puede eliminar el proyecto.',
+        'Acceso denegado: Solo el creador del proyecto puede eliminarlo.',
       );
     }
 
@@ -216,48 +385,54 @@ export class ProyectosService {
     return { message: 'Proyecto eliminado exitosamente.' };
   }
 
-  private resolverRol(
-    proyecto: { creadorId: number; colaboradores?: { usuarioId: number }[] },
-    usuarioId: number,
-  ): RolProyecto | null {
-    if (proyecto.creadorId === usuarioId) {
-      return RolProyecto.CREADOR;
+  /**
+   * Rol efectivo: `CREADOR` para el dueño, el nombre del permiso de la base
+   * para un colaborador, `null` si no es miembro.
+   *
+   * El creador no es un permiso del catálogo: es la propiedad del proyecto. Por
+   * eso `rolDe` devuelve el string ya resuelto y no consulta nada.
+   */
+  private rolDe(esCreador: boolean, permiso?: string | null): Miembro | null {
+    if (esCreador) {
+      return { rol: 'CREADOR', ...CAPACIDADES_CREADOR };
     }
-    if (
-      proyecto.colaboradores &&
-      proyecto.colaboradores.some((c) => c.usuarioId === usuarioId)
-    ) {
-      return RolProyecto.INVITADO;
+    if (!permiso) {
+      return null;
     }
-    return null;
+    return { rol: permiso, ...capacidadesDe(permiso) };
   }
 
   private mapearLista(
     proyecto: ProyectoListaBase,
-    rol: RolProyecto,
+    miembro: Miembro,
     totalColaboradores: number,
   ): ProyectoListaDto {
     return {
       id: proyecto.id,
       nombre: proyecto.nombre,
       creadorId: proyecto.creadorId,
-      miRol: rol,
+      miRol: miembro.rol,
       totalColaboradores,
+      puedeEditar: miembro.puedeEditar,
     };
   }
 
   private mapearRespuesta(
     proyecto: ProyectoBase,
-    rol: RolProyecto,
+    miembro: Miembro,
     totalColaboradores: number,
+    esquemaJson: unknown,
+    origen: OrigenDocumento,
   ): ProyectoRespuestaDto {
     return {
       id: proyecto.id,
       nombre: proyecto.nombre,
-      esquemaJson: (proyecto.esquemaJson ?? {}) as Record<string, unknown>,
+      esquemaJson: (esquemaJson ?? {}) as Record<string, unknown>,
       creadorId: proyecto.creadorId,
-      miRol: rol,
+      miRol: miembro.rol,
       totalColaboradores,
+      origen,
+      puedeEditar: miembro.puedeEditar,
     };
   }
 }

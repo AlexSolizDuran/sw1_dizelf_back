@@ -12,11 +12,10 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
-import { RolesProyecto } from '../../../common/decorators/roles-proyecto.decorator';
+import { RequiereCapacidad } from '../../../common/decorators/capacidad-proyecto.decorator';
 import { ProyectoRolGuard } from '../../../common/guards/proyecto-rol.guard';
 import { AgregarColaboradorDto } from '../dto/colaborador/agregar-colaborador.dto';
 import { ColaboradorRespuestaDto } from '../dto/colaborador/colaborador-respuesta.dto';
-import { RolProyecto } from '../enums/rol-proyecto.enum';
 import { ColaboradoresService } from '../service/colaboradores.service';
 
 @Controller('proyectos/:id/colaboradores')
@@ -25,7 +24,7 @@ export class ColaboradoresController {
   constructor(private readonly colaboradoresService: ColaboradoresService) {}
 
   @Post()
-  @RolesProyecto(RolProyecto.CREADOR)
+  @RequiereCapacidad('invitar')
   @HttpCode(HttpStatus.CREATED)
   agregar(
     @Param('id', ParseUUIDPipe) id: string,
@@ -36,7 +35,7 @@ export class ColaboradoresController {
   }
 
   @Get()
-  @RolesProyecto(RolProyecto.CREADOR, RolProyecto.INVITADO)
+  @RequiereCapacidad('leer')
   @HttpCode(HttpStatus.OK)
   listar(
     @Param('id', ParseUUIDPipe) id: string,
@@ -45,7 +44,7 @@ export class ColaboradoresController {
   }
 
   @Delete(':usuarioId')
-  @RolesProyecto(RolProyecto.CREADOR)
+  @RequiereCapacidad('invitar')
   @HttpCode(HttpStatus.OK)
   eliminar(
     @Param('id', ParseUUIDPipe) id: string,

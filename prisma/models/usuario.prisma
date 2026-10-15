@@ -10,6 +10,7 @@ model Usuario {
   // Campos virtuales inversos: no generan columna.
   proyectosCreados Proyecto[]
   colaboraciones   Colaborador[]
+  documentosEditados DocumentoColaborativo[]
 
   @@map("usuario")
 }

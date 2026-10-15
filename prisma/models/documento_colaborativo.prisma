@@ -1,10 +1,28 @@
+/**
+ * Documento vivo del plano.
+ *
+ * Es lo que ve el editor cuando existe: gana sobre `proyecto.esquema_json`,
+ * que queda como el último guardado consolidado. El autosave del editor (1 s)
+ * escribe acá; `proyecto.esquema_json` solo se actualiza en el guardado manual,
+ * que además deja una fila en `version`.
+ *
+ * Relación 1:1 con `Proyecto`: hay un solo documento vivo por proyecto, y el
+ * `@@unique` es lo que permite saber cuál es sin una consulta de "el más
+ * reciente" que se ambigua en concurrencia.
+ */
 model DocumentoColaborativo {
-  id          Int  @id @default(autoincrement()) @map("doc_colab_id")
-  esquemaJson Json @map("esquema_json_temp") @db.JsonB
+  id          Int      @id @default(autoincrement()) @map("doc_colab_id")
+  // Antes `esquema_json_temp`: era scratch y pasó a ser el documento vivo.
+  esquemaJson Json     @map("esquema_json") @db.JsonB
+  proyectoId  String   @unique @map("proyecto_id") @db.Uuid
+  proyecto    Proyecto @relation(fields: [proyectoId], references: [id], onDelete: Cascade)
 
-  // Relación de composición: el documento no existe sin su proyecto.
-  proyectoId String   @map("proyecto_id") @db.Uuid
-  proyecto   Proyecto @relation(fields: [proyectoId], references: [id], onDelete: Cascade)
+  // Quién hizo la última escritura. Permite auditar y alimenta la presencia.
+  usuarioId Int?  @map("usuario_id")
+  usuario   Usuario? @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
 
+  updatedAt DateTime @updatedAt @map("actualizado_en") @db.Timestamp(3)
+
+  @@index([usuarioId])
   @@map("documento_colaborativo")
 }

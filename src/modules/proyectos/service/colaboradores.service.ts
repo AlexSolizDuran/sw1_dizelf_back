@@ -6,8 +6,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../../common/prisma/prisma.service';
-import { RolProyecto } from '../enums/rol-proyecto.enum';
 import { AgregarColaboradorDto } from '../dto/colaborador/agregar-colaborador.dto';
+import {
+  PERMISO_POR_DEFECTO,
+  capacidadesDe,
+} from '../../../common/capacidades/capacidades-proyecto';
 import { ColaboradorRespuestaDto } from '../dto/colaborador/colaborador-respuesta.dto';
 
 type ColaboradorBase = {
@@ -21,8 +24,9 @@ type ColaboradorBase = {
 /**
  * Servicio del subdominio de Colaboradores dentro de Proyectos.
  * Solo el creador puede agregar o eliminar; cualquier miembro puede listar.
- * El rol asignado siempre es INVITADO (permisoId se resuelve dinámicamente
- * para que agregar roles futuros sea solo un INSERT en permiso).
+ * El permiso asignado viene del DTO (`EDITOR` o `LECTOR`) y se resuelve por
+ * nombre contra la tabla `permiso`, de modo que agregar un permiso al
+ * catálogo es solo un INSERT y no un deploy.
  */
 @Injectable()
 export class ColaboradoresService {
@@ -62,7 +66,7 @@ export class ColaboradoresService {
         `Agregado denegado: usuario ${creadorId} no es creador del proyecto ${proyectoId}.`,
       );
       throw new ForbiddenException(
-        'Acceso denegado: Solo el usuario con rol CREADOR puede agregar colaboradores.',
+        'Acceso denegado: Solo el creador del proyecto puede agregar colaboradores.',
       );
     }
 
@@ -92,14 +96,15 @@ export class ColaboradoresService {
       throw new ConflictException('El creador ya es miembro del proyecto.');
     }
 
-    const permiso = await this.prisma.permiso.findFirst({
-      where: { nombre: RolProyecto.INVITADO },
+    const nombrePermiso = dto.rol ?? PERMISO_POR_DEFECTO;
+    const permiso = await this.prisma.permiso.findUnique({
+      where: { nombre: nombrePermiso },
       select: { id: true },
     });
 
     if (!permiso) {
       throw new NotFoundException(
-        'Rol INVITADO no configurado en la tabla permiso. Ejecute el seed inicial.',
+        `Permiso ${nombrePermiso} no configurado en la tabla permiso. Ejecute el seed.`,
       );
     }
 
@@ -129,7 +134,7 @@ export class ColaboradoresService {
           username: invitado.username,
           gmail: invitado.persona.gmail,
         },
-        RolProyecto.INVITADO,
+        nombrePermiso,
       );
     } catch (error) {
       if (
@@ -176,7 +181,7 @@ export class ColaboradoresService {
         `Eliminación denegada: usuario ${creadorId} no es creador del proyecto ${proyectoId}.`,
       );
       throw new ForbiddenException(
-        'Acceso denegado: Solo el usuario con rol CREADOR puede eliminar colaboradores.',
+        'Acceso denegado: Solo el creador del proyecto puede eliminar colaboradores.',
       );
     }
 
@@ -198,7 +203,7 @@ export class ColaboradoresService {
   }
 
   /**
-   * Lista los colaboradores del proyecto. Cualquier miembro (CREADOR o INVITADO).
+   * Lista los colaboradores del proyecto. Cualquier miembro del proyecto.
    *
    * @param proyectoId Identificador del proyecto.
    */
@@ -231,14 +236,19 @@ export class ColaboradoresService {
           username: c.usuario.username,
           gmail: c.usuario.persona.gmail,
         },
-        c.permiso.nombre as RolProyecto,
+        c.permiso.nombre,
       ),
     );
   }
 
+  /**
+   * El permiso viaja como el nombre crudo de la tabla, más `puedeEditar`
+   * derivado. El frontend no tiene que replicar el catálogo para saber si
+   * puede escribir: si mañana aparece ADMINISTRADOR, el front lo recibe bien.
+   */
   private mapearRespuesta(
     colaborador: ColaboradorBase,
-    rol: RolProyecto,
+    permiso: string,
   ): ColaboradorRespuestaDto {
     return {
       id: colaborador.id,
@@ -246,7 +256,8 @@ export class ColaboradoresService {
       usuarioId: colaborador.usuarioId,
       username: colaborador.username,
       gmail: colaborador.gmail,
-      rol,
+      permiso,
+      puedeEditar: capacidadesDe(permiso).puedeEditar,
     };
   }
 }

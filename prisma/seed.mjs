@@ -1,23 +1,31 @@
 /**
  * Seed idempotente de la tabla catálogo `permiso`.
  *
- * Por qué existe: `Colaborador.permisoId` es FK obligatoria y
- * `ColaboradoresService` resuelve el id por nombre (`INVITADO`).
- * Sin estas filas, `POST /proyectos/:id/colaboradores` responde
- * 404 "Rol INVITADO no configurado".
+ * El catálogo son DOS permisos: EDITOR y LECTOR. El creador del proyecto no
+ * aparece acá porque no es un permiso sino el dueño: se reconoce por
+ * `proyecto.creador_id`, que es una relación y no una fila.
  *
- * Es idempotente: si el nombre ya existe no inserta duplicados
- * (la tabla no tiene @unique en nombre, por eso se busca antes).
+ * Por qué EDITOR y LECTOR: son el rango de la sesión colaborativa. EDITOR
+ * escribe en el documento; LECTOR entra, ve las ediciones en vivo y no puede
+ * escribir. Lo que puede hacer cada uno lo traduce `capacidades-proyecto.ts`,
+ * así que cambiar el catálogo es un INSERT y no un deploy.
+ *
+ * CREADOR e INVITADO se reconocían pero no se usaban: `ProyectoRolGuard` no
+ * leía esta tabla y deducía el rol por la forma de la relación, con lo que
+ * sembrar un permiso nuevo no concedía nada. La migración `catalogo_permisos`
+ * los renombra.
+ *
+ * Es idempotente: si el nombre ya existe no inserta duplicados.
  *
  * Uso: `npx prisma db seed` (requiere .env con NEON_DB_URL).
  */
 import { PrismaClient } from '@prisma/client';
 
-const ROLES_SEMILLA = ['CREADOR', 'INVITADO'];
+const PERMISOS_SEMILLA = ['EDITOR', 'LECTOR'];
 
 const prisma = new PrismaClient();
 
-for (const nombre of ROLES_SEMILLA) {
+for (const nombre of PERMISOS_SEMILLA) {
   const existente = await prisma.permiso.findFirst({
     where: { nombre },
     select: { id: true },
