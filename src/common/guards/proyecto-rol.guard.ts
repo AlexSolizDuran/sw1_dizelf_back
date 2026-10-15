@@ -9,12 +9,8 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
-import { PrismaService } from '../prisma/prisma.service';
-import {
-  CAPACIDADES_CREADOR,
-  capacidadesDe,
-  type Capacidades,
-} from '../capacidades/capacidades-proyecto';
+import { MembresiaService } from '../../modules/proyectos/service/membresia.service';
+import type { Capacidades } from '../capacidades/capacidades-proyecto';
 import type { JwtPayload } from '../../modules/auth/interfaces/jwt-payload.interface';
 import { CAPACIDAD_PROYECTO_KEY } from '../decorators/capacidad-proyecto.decorator';
 
@@ -46,7 +42,7 @@ export class ProyectoRolGuard implements CanActivate {
 
   constructor(
     private readonly reflector: Reflector,
-    private readonly prisma: PrismaService,
+    private readonly membresia: MembresiaService,
   ) {}
 
   async canActivate(contexto: ExecutionContext): Promise<boolean> {
@@ -71,29 +67,15 @@ export class ProyectoRolGuard implements CanActivate {
       );
     }
 
-    const proyecto = await this.prisma.proyecto.findUnique({
-      where: { id: proyectoId },
-      select: {
-        id: true,
-        creadorId: true,
-        colaboradores: {
-          where: { usuarioId: usuario.sub },
-          select: { permiso: { select: { nombre: true } } },
-          take: 1,
-        },
-      },
-    });
+    const resultado = await this.membresia.resolver(proyectoId, usuario.sub);
 
-    if (!proyecto) {
+    if (resultado.estado === 'NO_EXISTE') {
       throw new NotFoundException(
         `Proyecto con ID ${proyectoId} no encontrado.`,
       );
     }
 
-    const esCreador = proyecto.creadorId === usuario.sub;
-    const permiso = proyecto.colaboradores[0]?.permiso?.nombre ?? null;
-
-    if (!esCreador && !permiso) {
+    if (resultado.estado === 'NO_MIEMBRO') {
       this.logger.warn(
         `Acceso denegado: usuario ${usuario.sub} no es miembro del proyecto ${proyectoId}.`,
       );
@@ -102,21 +84,17 @@ export class ProyectoRolGuard implements CanActivate {
       );
     }
 
-    const capacidades = esCreador
-      ? CAPACIDADES_CREADOR
-      : capacidadesDe(permiso);
-
     // Se adjuntan a la solicitud para que los servicios no vuelvan a consultar.
-    solicitud.capacidadesProyecto = capacidades;
-    solicitud.rolProyecto = esCreador ? 'CREADOR' : permiso;
+    solicitud.capacidadesProyecto = resultado;
+    solicitud.rolProyecto = resultado.rol;
 
     const faltante = capacidadesExigidas.find(
-      (capacidad) => !cumple(capacidades, capacidad),
+      (capacidad) => !cumple(resultado, capacidad),
     );
 
     if (faltante) {
       this.logger.warn(
-        `Acceso denegado: usuario ${usuario.sub} con rol ${solicitud.rolProyecto} intentó ${contexto.getClass().name}.${contexto.getHandler().name} (requiere: ${faltante}).`,
+        `Acceso denegado: usuario ${usuario.sub} con rol ${resultado.rol} intentó ${contexto.getClass().name}.${contexto.getHandler().name} (requiere: ${faltante}).`,
       );
       throw new ForbiddenException(mensajeDeFalta(faltante));
     }
