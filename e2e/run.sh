@@ -10,6 +10,9 @@ export JWT_SECRET="e2e_secret_de_prueba_largo_32_chars_minimo"
 export FRONTEND_URL="http://localhost:$PORT,http://localhost:3000"
 export COOKIE_SECURE=false
 
+# Los tres E2E leen el mismo puerto del server de arriba.
+export E2E_BASE="http://localhost:$PORT"
+
 cd "$(dirname "$0")/.."
 
 echo "── compilando"
@@ -32,6 +35,11 @@ SALIDA=$?
 echo
 echo "── E2E de contratos de UI (colaboradores + versiones)"
 node e2e/ui-contratos.e2e.js
+SALIDA=$((SALIDA + $?))
+
+echo
+echo "── E2E de concurrencia con 5 usuarios"
+node e2e/concurrencia.e2e.js
 SALIDA=$((SALIDA + $?))
 
 echo

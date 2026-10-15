@@ -77,14 +77,40 @@ export class MembresiaService {
     };
   }
 
-  /** Nombre visible, para la lista de presencia. */
+  /** Nombre visible de un usuario, para la lista de presencia. */
   async nombreDe(usuarioId: number): Promise<string> {
-    const usuario = await this.prisma.usuario.findUnique({
-      where: { id: usuarioId },
-      select: { username: true, persona: { select: { nombre: true } } },
+    const mapa = await this.nombresDe([usuarioId]);
+    return mapa.get(usuarioId) ?? `Usuario ${usuarioId}`;
+  }
+
+  /**
+   * Nombres de varios usuarios en UNA consulta.
+   *
+   * Existe porque la presencia difunde la lista entera en cada conexión y
+   * desconexión. Con `nombreDe` por persona eran N consultas EN SERIE: con diez
+   * gente son diez round-trips encadenados, y abrir el proyecto disparaba uno
+   * por entrada, con el `await` frenando el handler de conexión.
+   */
+  async nombresDe(usuarioIds: number[]): Promise<Map<number, string>> {
+    const unicos = [...new Set(usuarioIds)];
+    if (unicos.length === 0) return new Map();
+
+    const usuarios = await this.prisma.usuario.findMany({
+      where: { id: { in: unicos } },
+      // `id`, no `usuario_id`: eso es el nombre de la columna. El campo de
+      // Prisma es `id` y está mapeado con `@map`.
+      select: {
+        id: true,
+        username: true,
+        persona: { select: { nombre: true } },
+      },
     });
-    return (
-      usuario?.persona?.nombre || usuario?.username || `Usuario ${usuarioId}`
+
+    return new Map(
+      usuarios.map((u) => [
+        u.id,
+        u.persona?.nombre || u.username || `Usuario ${u.id}`,
+      ]),
     );
   }
 }

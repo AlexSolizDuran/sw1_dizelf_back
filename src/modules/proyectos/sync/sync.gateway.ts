@@ -90,6 +90,26 @@ export class SyncGateway
 
   private readonly sesiones = new Map<string, Sesion>();
 
+  /**
+   * Creaciones de sesión en curso, por proyecto.
+   *
+   * SIN ESTO EL PROYECTO SE PARTE EN DOS. `asegurarDocumento` tiene un `await`
+   * (la lectura a la base) entre mirar el map y escribir en él. Si dos usuarios
+   * conectan a la vez —lo normal cuando varios abren el mismo enlace—:
+   *
+   *   A mira el map, no está      B mira el map, no está
+   *   A await leer(...)           B await leer(...)
+   *   A crea docA, lo pone        B crea docB, SOBREESCRIBE a A
+   *
+   * Los dos quedan en la misma sala de socket.io pero aplicando los updates
+   * sobre Y.Docs distintos: no se ven entre sí, y lo que escribió A no se
+   * persiste nunca porque al salir el último se guarda docB.
+   *
+   * Guardando la PROMESA de creación en vez de la sesión resuelta, el primero
+   * que llega la crea y los demás la esperan. Todos reciben el mismo doc.
+   */
+  private readonly creando = new Map<string, Promise<Sesion>>();
+
   private readonly DEBOUNCE_MS = 1500;
 
   constructor(
@@ -202,6 +222,7 @@ export class SyncGateway
       void this.documento.guardarMaterializado(proyectoId, sesion.doc);
     }
     this.sesiones.clear();
+    this.creando.clear();
   }
 
   /** Carga el doc desde la base la primera vez, o crea uno vacío. */
@@ -215,11 +236,31 @@ export class SyncGateway
       return existente;
     }
 
-    const escena = await this.documento.leer(proyectoId);
-    const doc = this.sembrar(escena);
-    const sesion: Sesion = { doc, refCount: 0, timer: null, sucio: false };
-    this.sesiones.set(proyectoId, sesion);
-    return sesion;
+    // La promesa se registra en el map ANTES de esperar nada. Quien llegue
+    // mientras el primero está en su `await` se engancha a esta misma promesa
+    // en vez de crear un doc paralelo. Ver la nota de `creando`.
+    let pendiente = this.creando.get(proyectoId);
+
+    if (!pendiente) {
+      pendiente = (async () => {
+        const escena = await this.documento.leer(proyectoId);
+        const doc = this.sembrar(escena);
+        const sesion: Sesion = { doc, refCount: 0, timer: null, sucio: false };
+        this.sesiones.set(proyectoId, sesion);
+        return sesion;
+      })();
+      this.creando.set(proyectoId, pendiente);
+    }
+
+    try {
+      return await pendiente;
+    } finally {
+      // Se limpia solo si sigue siendo esta: si otra generación entró en
+      // paralelo, no hay que pisarla.
+      if (this.creando.get(proyectoId) === pendiente) {
+        this.creando.delete(proyectoId);
+      }
+    }
   }
 
   /**
@@ -277,6 +318,7 @@ export class SyncGateway
     }
     sesion.doc.destroy();
     this.sesiones.delete(proyectoId);
+    this.creando.delete(proyectoId);
   }
 
   private sala(proyectoId: string): string {

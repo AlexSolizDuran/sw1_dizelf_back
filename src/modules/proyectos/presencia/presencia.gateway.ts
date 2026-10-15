@@ -223,14 +223,23 @@ export class PresenciaGateway
    * presencia desactualizada.
    */
   private async difundir(proyectoId: string): Promise<void> {
+    const sockets = await this.server.in(this.sala(proyectoId)).fetchSockets();
+
+    // Los nombres salen en UNA consulta para toda la sala. Antes era una por
+    // persona y encadenadas con `await`: con diez gente son diez round-trips
+    // en serie, y esto corre en cada conexión y cada desconexión.
+    const ids = sockets
+      .map((s) => datos(s).estado?.usuarioId)
+      .filter((id): id is number => typeof id === 'number');
+    const nombres = await this.membresia.nombresDe(ids);
+
     const presentes: EstadoPresencia[] = [];
 
-    for (const socket of await this.server
-      .in(this.sala(proyectoId))
-      .fetchSockets()) {
+    for (const socket of sockets) {
       const estado = datos(socket).estado;
       if (!estado) continue;
-      const nombre = await this.membresia.nombreDe(estado.usuarioId);
+      const nombre =
+        nombres.get(estado.usuarioId) ?? `Usuario ${estado.usuarioId}`;
       presentes.push(
         datos(socket).ultimoEstado ?? {
           usuarioId: estado.usuarioId,

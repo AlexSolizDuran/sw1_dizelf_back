@@ -7,7 +7,7 @@
  * Uso: node e2e/ui-contratos.e2e.js
  */
 
-const BASE = process.env.E2E_BASE || 'http://localhost:3098';
+const BASE = process.env.E2E_BASE || 'http://localhost:3099';
 
 let fallos = 0;
 const comprobar = (nombre, ok, detalle = '') => {
