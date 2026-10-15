@@ -31,6 +31,8 @@ interface Sesion {
   doc: Y.Doc;
   refCount: number;
   timer: ReturnType<typeof setTimeout> | null;
+  /** Hubo alguna escritura desde que se sembró: define si vale la pena persistir. */
+  sucio: boolean;
 }
 
 interface EstadoSocket {
@@ -190,6 +192,7 @@ export class SyncGateway
 
     // Reenvío a los demás: el emisor ya lo tiene aplicado en local.
     socket.to(this.sala(estado.proyectoId)).emit('sync:update', bytes);
+    sesion.sucio = true;
     this.programarPersistencia(estado.proyectoId, sesion);
   }
 
@@ -214,7 +217,7 @@ export class SyncGateway
 
     const escena = await this.documento.leer(proyectoId);
     const doc = this.sembrar(escena);
-    const sesion: Sesion = { doc, refCount: 0, timer: null };
+    const sesion: Sesion = { doc, refCount: 0, timer: null, sucio: false };
     this.sesiones.set(proyectoId, sesion);
     return sesion;
   }
@@ -259,10 +262,21 @@ export class SyncGateway
     sesion: Sesion,
   ): Promise<void> {
     if (sesion.timer) clearTimeout(sesion.timer);
-    await this.documento.guardarMaterializado(proyectoId, sesion.doc);
+    // Si nadie escribió, el doc es el que se sembró desde la base: persistirlo
+    // sería una escritura idéntica a lo que ya está. Sobre todo importa para
+    // el LECTOR, que abre y cierra sin tocar nada.
+    if (sesion.sucio) {
+      await this.documento.guardarMaterializado(proyectoId, sesion.doc);
+      this.logger.log(
+        `Sync: documento de ${proyectoId} persistido y liberado.`,
+      );
+    } else {
+      this.logger.log(
+        `Sync: sesión de ${proyectoId} cerrada sin cambios; no se persiste.`,
+      );
+    }
     sesion.doc.destroy();
     this.sesiones.delete(proyectoId);
-    this.logger.log(`Sync: documento de ${proyectoId} persistido y liberado.`);
   }
 
   private sala(proyectoId: string): string {

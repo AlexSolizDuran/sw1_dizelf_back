@@ -26,23 +26,47 @@ import { PrismaService } from '../../../common/prisma/prisma.service';
 export class DocumentoService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Documento vivo del proyecto, o `null` si todavía no existe. */
+  /**
+   * Escena vigente del proyecto: el documento vivo si existe, y si no el último
+   * guardado consolidado.
+   *
+   * EL FALLBACK NO ES OPCIONAL. Sin él, el primer cliente que abre un proyecto
+   * que nadie editó desde que se migró lee un `Y.Doc` vacío, y el primer
+   * guardado lo persiste: como `documento_colaborativo` gana sobre
+   * `proyecto.esquema_json`, el plano quedaría vacío para todos, para siempre.
+   * El `@@unique` de la tabla no avisa porque el upsert es por proyecto.
+   */
   async leer(proyectoId: string): Promise<Record<string, unknown> | null> {
-    const documento = await this.prisma.documentoColaborativo.findUnique({
-      where: { proyectoId },
-      select: { esquemaJson: true },
+    const proyecto = await this.prisma.proyecto.findUnique({
+      where: { id: proyectoId },
+      select: {
+        esquemaJson: true,
+        documentos: { select: { esquemaJson: true }, take: 1 },
+      },
     });
 
-    if (!documento) return null;
+    if (!proyecto) return null;
 
-    const escena = documento.esquemaJson as Record<string, unknown>;
+    const bruto = proyecto.documentos[0]?.esquemaJson ?? proyecto.esquemaJson;
+    return this.desenvolver(bruto);
+  }
 
-    // El documento guardado viene envuelto en `{ version, scene, vista }`. Al
-    // gateway le interesa la escena, que es la que va al Y.Doc.
-    if (typeof escena.scene === 'object' && escena.scene !== null) {
-      return escena.scene as Record<string, unknown>;
+  /**
+   * Saca la escena del sobre `{ version, scene, vista }`.
+   *
+   * El documento guardado va envuelto por el DTO (`esquemaJson` tiene que ser
+   * un objeto). Al gateway le interesa `scene`, que es la que va al `Y.Doc`.
+   */
+  private desenvolver(bruto: unknown): Record<string, unknown> | null {
+    if (!bruto || typeof bruto !== 'object') return null;
+    const registro = bruto as Record<string, unknown>;
+    const escena = registro.scene;
+    if (escena && typeof escena === 'object' && escena !== null) {
+      return escena as Record<string, unknown>;
     }
-    return escena;
+    // Escena suelta, de una fila vieja o del propio proyecto.
+    if (registro.nodes) return registro;
+    return null;
   }
 
   /**
