@@ -93,6 +93,10 @@ function abrir(proyectoId, cookie, etiqueta) {
     const t = setTimeout(() => rej(new Error(`${etiqueta}: sin sync:inicial`)), 12000);
     socket.once('sync:inicial', (b) => {
       clearTimeout(t);
+      // El server descarta los `sync:update` de este socket hasta que confirme
+      // que aplicó el estado inicial. Sin este ack, todos los editores serían
+      // ignorados y la prueba fallaría con "los cambios no llegan".
+      socket.emit('sync:listo');
       res(b instanceof Uint8Array ? b : new Uint8Array(b));
     });
   });

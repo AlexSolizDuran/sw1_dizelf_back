@@ -42,7 +42,8 @@ const cookieDe = (r) => (r.headers.getSetCookie?.() ?? [])
 
   const ana = await reg('ana');
   const luis = await reg('luis');
-  comprobar('registro', ana.status === 201 && luis.status === 201);
+  const pepe = await reg('pepe');
+  comprobar('registro', ana.status === 201 && luis.status === 201 && pepe.status === 201);
 
   const proy = await api('/proyectos', {
     metodo: 'POST', cookie: ana.cookie,
@@ -63,15 +64,33 @@ const cookieDe = (r) => (r.headers.getSetCookie?.() ?? [])
   comprobar('LECTOR viene con puedeEditar=false', c?.puedeEditar === false);
   comprobar('el permiso es el nombre de la base, no un enum', c?.permiso === 'LECTOR', String(c?.permiso));
 
-  // ── Cambiar de LECTOR a EDITOR no existe: quitar e invitar de nuevo ──────
-  const quitar = await api(`/proyectos/${pid}/colaboradores/${c.usuarioId}`, { metodo: 'DELETE', cookie: ana.cookie });
-  comprobar('quitar colaborador', quitar.status === 200, String(quitar.status));
-
-  await api(`/proyectos/${pid}/colaboradores`, {
-    metodo: 'POST', cookie: ana.cookie, cuerpo: { identificador: `luis${sfx}`, rol: 'EDITOR' },
+  // ── Cambiar de LECTOR a EDITOR sin quitar e invitar de nuevo ─────────────
+  const ascender = await api(`/proyectos/${pid}/colaboradores/${c.usuarioId}`, {
+    metodo: 'PATCH', cookie: ana.cookie, cuerpo: { rol: 'EDITOR' },
   });
+  comprobar(
+    'ascender a EDITOR',
+    ascender.status === 200 && ascender.json?.puedeEditar === true,
+    `status=${ascender.status} puedeEditar=${ascender.json?.puedeEditar}`,
+  );
+
   const lista2 = await api(`/proyectos/${pid}/colaboradores`, { cookie: ana.cookie });
-  comprobar('re-invitar como EDITOR', lista2.json?.[0]?.puedeEditar === true);
+  comprobar('el cambio de permiso persiste', lista2.json?.[0]?.permiso === 'EDITOR');
+
+  const cambiarSinPermiso = await api(`/proyectos/${pid}/colaboradores/${c.usuarioId}`, {
+    metodo: 'PATCH', cookie: luis.cookie, cuerpo: { rol: 'LECTOR' },
+  });
+  comprobar('un colaborador no puede cambiar permisos', cambiarSinPermiso.status === 403, String(cambiarSinPermiso.status));
+
+  const cambiarRolInvalido = await api(`/proyectos/${pid}/colaboradores/${c.usuarioId}`, {
+    metodo: 'PATCH', cookie: ana.cookie, cuerpo: { rol: 'ADMIN' },
+  });
+  comprobar('rol fuera del catálogo al cambiar da 400', cambiarRolInvalido.status === 400, String(cambiarRolInvalido.status));
+
+  const degradar = await api(`/proyectos/${pid}/colaboradores/${c.usuarioId}`, {
+    metodo: 'PATCH', cookie: ana.cookie, cuerpo: { rol: 'LECTOR' },
+  });
+  comprobar('degradar a LECTOR', degradar.status === 200 && degradar.json?.puedeEditar === false);
 
   const duplicado = await api(`/proyectos/${pid}/colaboradores`, {
     metodo: 'POST', cookie: ana.cookie, cuerpo: { identificador: `luis${sfx}`, rol: 'EDITOR' },
@@ -82,6 +101,19 @@ const cookieDe = (r) => (r.headers.getSetCookie?.() ?? [])
     metodo: 'POST', cookie: ana.cookie, cuerpo: { identificador: `luis${sfx}`, rol: 'ADMIN' },
   });
   comprobar('rol fuera del catálogo da 400', rolInvalido.status === 400, String(rolInvalido.status));
+
+  // Sin rol explícito, el invitado entra como LECTOR (permiso por defecto).
+  const porDefecto = await api(`/proyectos/${pid}/colaboradores`, {
+    metodo: 'POST', cookie: ana.cookie, cuerpo: { identificador: `pepe${sfx}` },
+  });
+  comprobar(
+    'invitar sin rol entra como LECTOR',
+    porDefecto.status === 201 && porDefecto.json?.permiso === 'LECTOR' && porDefecto.json?.puedeEditar === false,
+    `status=${porDefecto.status} permiso=${porDefecto.json?.permiso}`,
+  );
+
+  const quitar = await api(`/proyectos/${pid}/colaboradores/${c.usuarioId}`, { metodo: 'DELETE', cookie: ana.cookie });
+  comprobar('quitar colaborador', quitar.status === 200, String(quitar.status));
 
   const sinPermiso = await api(`/proyectos/${pid}/colaboradores`, { cookie: luis.cookie });
   comprobar('un colaborador no puede administrar el proyecto', sinPermiso.status === 200 || sinPermiso.status === 403, String(sinPermiso.status));
@@ -113,6 +145,28 @@ const cookieDe = (r) => (r.headers.getSetCookie?.() ?? [])
   comprobar('el proyecto restaurado conserva la escena original',
     trasRestaurar.json?.esquemaJson?.scene?.nodes?.s1?.nombre === undefined,
     JSON.stringify(trasRestaurar.json?.esquemaJson?.scene?.nodes?.s1));
+
+  // ── Nombre en el historial: renombrar y eliminar ─────────────────────────
+  const renombrar = await api(`/proyectos/${pid}/versiones/${v1.json.id}`, {
+    metodo: 'PATCH', cookie: ana.cookie, cuerpo: { nombre: 'Antes del cambio' },
+  });
+  comprobar('renombrar versión',
+    renombrar.status === 200 && renombrar.json?.nombre === 'Antes del cambio',
+    `status=${renombrar.status} nombre=${renombrar.json?.nombre}`);
+
+  const nombreVacio = await api(`/proyectos/${pid}/versiones/${v1.json.id}`, {
+    metodo: 'PATCH', cookie: ana.cookie, cuerpo: { nombre: '' },
+  });
+  comprobar('nombre vacío al renombrar da 400', nombreVacio.status === 400, String(nombreVacio.status));
+
+  const eliminar = await api(`/proyectos/${pid}/versiones/${v2.json.id}`, {
+    metodo: 'DELETE', cookie: ana.cookie,
+  });
+  comprobar('eliminar versión', eliminar.status === 200, String(eliminar.status));
+
+  const historial2 = await api(`/proyectos/${pid}/versiones`, { cookie: ana.cookie });
+  comprobar('la versión eliminada desaparece del historial',
+    !historial2.json?.some((v) => v.id === v2.json.id));
 
   console.log('\n' + (fallos === 0 ? 'CONTRATOS DE UI OK' : `${fallos} FALLAS`));
   process.exit(fallos === 0 ? 0 : 1);

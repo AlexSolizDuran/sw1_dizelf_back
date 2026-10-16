@@ -77,7 +77,20 @@ function abrir(base, namespace, query, cookie, etiqueta) {
     socket.on('connect', () => { clearTimeout(t); resolve(); });
     socket.on('connect_error', (e) => { clearTimeout(t); reject(new Error(`${etiqueta}: ${e.message}`)); });
   });
-  return { socket, conectado };
+  /**
+   * El estado inicial se captura desde ya (misma carrera que en 'connect') y se
+   * confirma con `sync:listo`. El server descarta los `sync:update` de este
+   * socket hasta el ack, así que sin esto un editor no podría escribir.
+   */
+  const inicial = new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${etiqueta}: sin sync:inicial`)), 12000);
+    socket.once('sync:inicial', (b) => {
+      clearTimeout(t);
+      socket.emit('sync:listo');
+      resolve(b instanceof Uint8Array ? b : new Uint8Array(b));
+    });
+  });
+  return { socket, conectado, inicial };
 }
 
 /** Espera a que la lista de presencia tenga al menos `n` personas. */
@@ -214,9 +227,10 @@ function esperarEvento(socket, evento, etiqueta, ms = 8000) {
   const sLuis = sl.socket;
   await Promise.all([sa.conectado, sl.conectado]);
 
-  const inicialAna = await esperarEvento(sAna, 'sync:inicial', 'sync inicial Ana');
+  const inicialAna = await sa.inicial;
+  await sl.inicial;
   const docAna = new Y.Doc();
-  Y.applyUpdate(docAna, new Uint8Array(inicialAna));
+  Y.applyUpdate(docAna, inicialAna);
 
   const nodosAna = docAna.getMap('scene:nodes').toJSON();
   comprobar('el doc inicial trae la escena del proyecto', Boolean(nodosAna.site_1), JSON.stringify(Object.keys(nodosAna)));
@@ -243,6 +257,7 @@ function esperarEvento(socket, evento, etiqueta, ms = 8000) {
   const sm = abrir(BASE, 'sync', { proyectoId: pid }, cookieMia, 'sync Mia');
   const sMia = sm.socket;
   await sm.conectado;
+  await sm.inicial;
   const esperaAna = esperarEvento(sAna, 'sync:update', 'update en Ana desde LECTOR');
   sMia.emit('sync:update', Y.encodeStateAsUpdate(docAna));
   const llego = await esperaAna.then(() => true).catch(() => false);
