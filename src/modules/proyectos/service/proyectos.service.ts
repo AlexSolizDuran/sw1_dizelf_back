@@ -22,6 +22,8 @@ import {
   type OrigenDocumento,
 } from '../dto/proyecto/proyecto-respuesta.dto';
 import { VersionRespuestaDto } from '../dto/proyecto/version-respuesta.dto';
+import { SyncGateway, type EscenaPlana } from '../sync/sync.gateway';
+import { DocumentoService } from './documento.service';
 
 /**
  * Estado que devuelve el guard en la solicitud.
@@ -48,7 +50,11 @@ type ProyectoListaBase = {
 export class ProyectosService {
   private readonly logger = new Logger(ProyectosService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly documento: DocumentoService,
+    private readonly sync: SyncGateway,
+  ) {}
 
   async crear(
     creadorId: number,
@@ -268,9 +274,10 @@ export class ProyectosService {
       this.prisma.version.create({
         data: {
           proyectoId,
+          nombre: nombre ?? null,
           esquemaJson: contenido as unknown as Prisma.InputJsonValue,
         },
-        select: { id: true, fecha: true },
+        select: { id: true, fecha: true, nombre: true },
       }),
       this.prisma.proyecto.update({
         where: { id: proyectoId },
@@ -282,7 +289,7 @@ export class ProyectosService {
       `Versión ${version.id} del proyecto ${proyectoId} guardada por ${usuarioId}${nombre ? ` («${nombre}»)` : ''}.`,
     );
 
-    return { id: version.id, fecha: version.fecha, nombre: nombre ?? null };
+    return { id: version.id, fecha: version.fecha, nombre: version.nombre };
   }
 
   /**
@@ -303,10 +310,14 @@ export class ProyectosService {
       where: { proyectoId },
       orderBy: { fecha: 'desc' },
       take: limite,
-      select: { id: true, fecha: true },
+      select: { id: true, fecha: true, nombre: true },
     });
 
-    return versiones.map((v) => ({ id: v.id, fecha: v.fecha, nombre: null }));
+    return versiones.map((v) => ({
+      id: v.id,
+      fecha: v.fecha,
+      nombre: v.nombre,
+    }));
   }
 
   /**
@@ -345,11 +356,87 @@ export class ProyectosService {
       }),
     ]);
 
+    // La base ya quedó con lo restaurado, pero el gateway mantiene el doc vivo
+    // en memoria: si no se corrige acá, el próximo guardado o el disconnect lo
+    // volvería a pisar con la escena vieja.
+    const escena = this.documento.desenvolver(contenido) as EscenaPlana | null;
+    this.sync.aplicarRestauracion(proyectoId, escena);
+
     this.logger.log(
       `Versión ${versionId} del proyecto ${proyectoId} restaurada por ${usuarioId}.`,
     );
 
     return this.obtenerParaMiembro(proyectoId, usuarioId);
+  }
+
+  /**
+   * Renombra una versión del historial.
+   *
+   * La etiqueta es solo para reconocerla en la lista; no toca el contenido ni
+   * el documento vivo.
+   */
+  async renombrarVersion(
+    proyectoId: string,
+    usuarioId: number,
+    versionId: number,
+    nombre: string,
+  ): Promise<VersionRespuestaDto> {
+    await this.obtenerParaMiembro(proyectoId, usuarioId);
+
+    const version = await this.prisma.version.findFirst({
+      where: { id: versionId, proyectoId },
+      select: { id: true },
+    });
+    if (!version) {
+      throw new NotFoundException(
+        `La versión ${versionId} no pertenece al proyecto ${proyectoId}.`,
+      );
+    }
+
+    const actualizada = await this.prisma.version.update({
+      where: { id: versionId },
+      data: { nombre },
+      select: { id: true, fecha: true, nombre: true },
+    });
+
+    return {
+      id: actualizada.id,
+      fecha: actualizada.fecha,
+      nombre: actualizada.nombre,
+    };
+  }
+
+  /**
+   * Borra una versión del historial.
+   *
+   * No toca el documento vivo ni `proyecto.esquema_json`: una versión es un
+   * punto de restauración, no el estado actual. Borrarla solo quita la
+   * posibilidad de volver a ese punto.
+   */
+  async eliminarVersion(
+    proyectoId: string,
+    usuarioId: number,
+    versionId: number,
+  ): Promise<{ message: string }> {
+    await this.obtenerParaMiembro(proyectoId, usuarioId);
+
+    const version = await this.prisma.version.findFirst({
+      where: { id: versionId, proyectoId },
+      select: { id: true },
+    });
+    if (!version) {
+      throw new NotFoundException(
+        `La versión ${versionId} no pertenece al proyecto ${proyectoId}.`,
+      );
+    }
+
+    await this.prisma.version.delete({ where: { id: versionId } });
+
+    this.logger.log(
+      `Versión ${versionId} del proyecto ${proyectoId} eliminada por ${usuarioId}.`,
+    );
+
+    return { message: `Versión ${versionId} eliminada.` };
   }
 
   async eliminarComoCreador(

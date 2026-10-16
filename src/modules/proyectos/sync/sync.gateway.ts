@@ -33,15 +33,24 @@ interface Sesion {
   timer: ReturnType<typeof setTimeout> | null;
   /** Hubo alguna escritura desde que se sembró: define si vale la pena persistir. */
   sucio: boolean;
+  /** Generación del doc. Sube con cada re-seed (restaurar versión). */
+  epoch: number;
 }
 
 interface EstadoSocket {
   usuarioId: number;
   proyectoId: string;
   puedeEditar: boolean;
+  /**
+   * Generación del doc que este socket tiene aplicada. Empieza en `-1` (todavía
+   * no confirmó el `sync:inicial`) y se pone al día cuando el cliente manda
+   * `sync:listo`. Un `sync:update` con epoch viejo se descarta: viene de la
+   * escena anterior a un re-seed y aplicarlo resucitaría los nodos viejos.
+   */
+  epoch: number;
 }
 
-interface EscenaPlana {
+export interface EscenaPlana {
   nodes?: Record<string, unknown>;
   rootNodeIds?: string[];
 }
@@ -156,6 +165,7 @@ export class SyncGateway
       usuarioId: token.sub,
       proyectoId,
       puedeEditar: miembro.puedeEditar,
+      epoch: -1,
     } satisfies EstadoSocket;
     void socket.join(this.sala(proyectoId));
 
@@ -194,6 +204,12 @@ export class SyncGateway
     const sesion = this.sesiones.get(estado.proyectoId);
     if (!sesion) return;
 
+    // El update viene de una generación anterior al doc (un re-seed por
+    // restaurar versión). Aplicarlo fusionaría los nodos viejos sobre lo
+    // restaurado. Se descarta: el cliente ya recibió el `sync:inicial` nuevo y
+    // en cuanto lo confirme con `sync:listo` vuelve a operar.
+    if (estado.epoch !== sesion.epoch) return;
+
     // Revalidación por mensaje: el permiso pudo cambiar desde que conectó.
     const actual = await this.membresia.resolver(
       estado.proyectoId,
@@ -214,6 +230,67 @@ export class SyncGateway
     socket.to(this.sala(estado.proyectoId)).emit('sync:update', bytes);
     sesion.sucio = true;
     this.programarPersistencia(estado.proyectoId, sesion);
+  }
+
+  /**
+   * El cliente confirma que aplicó el `sync:inicial`.
+   *
+   * Cierra la carrera del restore: hasta que llega este ack, el socket queda en
+   * la generación vieja y sus `sync:update` se descartan. Así un update que ya
+   * estaba en vuelo cuando se re-sembró el doc no resucita la escena anterior.
+   */
+  @SubscribeMessage('sync:listo')
+  confirmarInicial(@ConnectedSocket() socket: Socket): void {
+    const estado = estadoDe(socket);
+    if (!estado) return;
+    const sesion = this.sesiones.get(estado.proyectoId);
+    if (!sesion) return;
+    estado.epoch = sesion.epoch;
+  }
+
+  /**
+   * Impone el estado restaurado sobre la sesión en vivo.
+   *
+   * Restaurar una versión escribe la base, pero el gateway es la fuente de
+   * verdad mientras hay gente conectada: su `Y.Doc` en memoria sigue con la
+   * escena vieja y la volvería a persistir al desconectar el último cliente
+   * (por eso "restaurar y se revierte"). Acá se re-siembra el doc desde la
+   * escena restaurada y se difunde el estado completo a la sala.
+   *
+   * Se emite `sync:inicial`, NO `sync:update`: el cliente lo aplica con
+   * `setScene`, que reemplaza la escena entera. Con un update suelto —fusión
+   * CRDT— los nodos que el cliente tenía de más no se borrarían.
+   *
+   * Sin sesión no hay nada que corregir: la base ya tiene lo restaurado y el
+   * próximo que entre siembra desde ahí.
+   */
+  aplicarRestauracion(proyectoId: string, escena: EscenaPlana | null): void {
+    const sesion = this.sesiones.get(proyectoId);
+    if (!sesion) return;
+
+    // El debounce pendiente persistiría el doc viejo: se cancela antes de
+    // reemplazarlo.
+    if (sesion.timer) {
+      clearTimeout(sesion.timer);
+      sesion.timer = null;
+    }
+
+    sesion.doc.destroy();
+    sesion.doc = this.sembrar(escena);
+    // Nueva generación: los sockets quedan desactualizados hasta que apliquen
+    // el `sync:inicial` de abajo y lo confirmen con `sync:listo`.
+    sesion.epoch += 1;
+    // El doc re-sembrado es el estado autoritativo: al desconectar el último
+    // hay que persistirlo (es idéntico a lo que ya hay en la base).
+    sesion.sucio = true;
+
+    this.server
+      ?.to(this.sala(proyectoId))
+      .emit('sync:inicial', Y.encodeStateAsUpdate(sesion.doc));
+
+    this.logger.log(
+      `Sync: documento de ${proyectoId} re-sembrado con la versión restaurada.`,
+    );
   }
 
   onModuleDestroy(): void {
@@ -245,7 +322,13 @@ export class SyncGateway
       pendiente = (async () => {
         const escena = await this.documento.leer(proyectoId);
         const doc = this.sembrar(escena);
-        const sesion: Sesion = { doc, refCount: 0, timer: null, sucio: false };
+        const sesion: Sesion = {
+          doc,
+          refCount: 0,
+          timer: null,
+          sucio: false,
+          epoch: 0,
+        };
         this.sesiones.set(proyectoId, sesion);
         return sesion;
       })();
@@ -284,7 +367,12 @@ export class SyncGateway
         }
         nodos.set(id, mapa);
       }
-      doc.getArray<string>(CLAVES.roots).push(escena.rootNodeIds ?? []);
+      // `Set`: una raíz repetida en la base multiplica el render (React clavea
+      // por id y monta un `site` por copia) y termina tirando WebGPU. Sembrar
+      // limpio corta la recursión.
+      doc
+        .getArray<string>(CLAVES.roots)
+        .push([...new Set(escena.rootNodeIds ?? [])]);
     }, 'semilla');
 
     return doc;

@@ -23,6 +23,7 @@ import { CrearProyectoDto } from '../dto/proyecto/crear-proyecto.dto';
 import { GuardarVersionDto } from '../dto/proyecto/guardar-version.dto';
 import { ProyectosPaginadosDto } from '../dto/proyecto/proyecto-lista.dto';
 import { ProyectoRespuestaDto } from '../dto/proyecto/proyecto-respuesta.dto';
+import { RenombrarVersionDto } from '../dto/proyecto/renombrar-version.dto';
 import { VersionRespuestaDto } from '../dto/proyecto/version-respuesta.dto';
 import { ProyectosService } from '../service/proyectos.service';
 
@@ -112,6 +113,41 @@ export class ProyectosController {
     @Param('versionId', ParseIntPipe) versionId: number,
   ): Promise<ProyectoRespuestaDto> {
     return this.proyectosService.restaurarVersion(id, usuarioId, versionId);
+  }
+
+  /**
+   * Renombra una versión del historial. Solo cambia la etiqueta, no el
+   * contenido ni el documento vivo.
+   */
+  @Patch(':id/versiones/:versionId')
+  @UseGuards(ProyectoRolGuard)
+  @RequiereCapacidad('editar')
+  @HttpCode(HttpStatus.OK)
+  renombrarVersion(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('sub') usuarioId: number,
+    @Param('versionId', ParseIntPipe) versionId: number,
+    @Body() dto: RenombrarVersionDto,
+  ): Promise<VersionRespuestaDto> {
+    return this.proyectosService.renombrarVersion(
+      id,
+      usuarioId,
+      versionId,
+      dto.nombre,
+    );
+  }
+
+  /** Borra una versión del historial. No toca el documento vivo. */
+  @Delete(':id/versiones/:versionId')
+  @UseGuards(ProyectoRolGuard)
+  @RequiereCapacidad('editar')
+  @HttpCode(HttpStatus.OK)
+  eliminarVersion(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('sub') usuarioId: number,
+    @Param('versionId', ParseIntPipe) versionId: number,
+  ): Promise<{ message: string }> {
+    return this.proyectosService.eliminarVersion(id, usuarioId, versionId);
   }
 
   @Delete(':id')

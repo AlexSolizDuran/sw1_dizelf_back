@@ -1,5 +1,8 @@
 model Version {
   id          Int      @id @default(autoincrement()) @map("version_id")
+  // Etiqueta del guardado manual. Opcional: el autosave no crea versiones y una
+  // versión vieja (previa a la columna) queda sin nombre.
+  nombre      String?  @map("nombre_version") @db.VarChar(100)
   esquemaJson Json     @map("esquema_json_version") @db.JsonB
   fecha       DateTime @default(now()) @map("fecha_version") @db.Timestamp(3)
 

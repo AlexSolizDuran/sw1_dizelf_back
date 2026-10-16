@@ -56,8 +56,12 @@ export class DocumentoService {
    *
    * El documento guardado va envuelto por el DTO (`esquemaJson` tiene que ser
    * un objeto). Al gateway le interesa `scene`, que es la que va al `Y.Doc`.
+   *
+   * Es público porque restaurar una versión necesita la escena para re-sembrar
+   * el doc en memoria del gateway; el contenido histórico puede venir envuelto
+   * o crudo y la normalización vive acá.
    */
-  private desenvolver(bruto: unknown): Record<string, unknown> | null {
+  desenvolver(bruto: unknown): Record<string, unknown> | null {
     if (!bruto || typeof bruto !== 'object') return null;
     const registro = bruto as Record<string, unknown>;
     const escena = registro.scene;
@@ -93,7 +97,9 @@ export class DocumentoService {
   private materializar(doc: Y.Doc): Record<string, unknown> {
     return {
       nodes: doc.getMap('scene:nodes').toJSON(),
-      rootNodeIds: doc.getArray('scene:roots').toJSON(),
+      // Se deduplica al persistir: una raíz repetida ya rompió el editor una vez
+      // (cientos de `site_default`, clave de React repetida y flood de WebGPU).
+      rootNodeIds: [...new Set(doc.getArray<string>('scene:roots').toJSON())],
       collections: doc.getMap('scene:collections').toJSON(),
       materials: doc.getMap('scene:materials').toJSON(),
       installedPlugins: doc.getArray('scene:plugins').toJSON(),

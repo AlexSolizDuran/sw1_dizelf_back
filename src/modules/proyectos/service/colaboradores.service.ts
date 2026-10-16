@@ -152,6 +152,94 @@ export class ColaboradoresService {
   }
 
   /**
+   * Cambia el permiso de un colaborador existente. Solo el creador.
+   *
+   * Es el equivalente a quitar y volver a invitar, sin perder la fila ni
+   * mandar dos requests. Igual que al invitar, la doble capa de autorización:
+   * el Guard ya exige CREADOR, aquí se re-verifica.
+   *
+   * @throws NotFoundException si el proyecto, el permiso o la colaboración no existen.
+   * @throws ForbiddenException si quien cambia no es el creador.
+   */
+  async actualizarPermisoComoCreador(
+    proyectoId: string,
+    creadorId: number,
+    usuarioId: number,
+    rol: string,
+  ): Promise<ColaboradorRespuestaDto> {
+    const proyecto = await this.prisma.proyecto.findUnique({
+      where: { id: proyectoId },
+      select: { id: true, creadorId: true },
+    });
+
+    if (!proyecto) {
+      throw new NotFoundException(
+        `Proyecto con ID ${proyectoId} no encontrado.`,
+      );
+    }
+
+    if (proyecto.creadorId !== creadorId) {
+      this.logger.warn(
+        `Cambio de permiso denegado: usuario ${creadorId} no es creador del proyecto ${proyectoId}.`,
+      );
+      throw new ForbiddenException(
+        'Acceso denegado: Solo el creador del proyecto puede gestionar colaboradores.',
+      );
+    }
+
+    const permiso = await this.prisma.permiso.findUnique({
+      where: { nombre: rol },
+      select: { id: true },
+    });
+    if (!permiso) {
+      throw new NotFoundException(
+        `Permiso ${rol} no configurado en la tabla permiso. Ejecute el seed.`,
+      );
+    }
+
+    const colaborador = await this.prisma.colaborador.findFirst({
+      where: { proyectoId, usuarioId },
+      select: { id: true },
+    });
+    if (!colaborador) {
+      throw new NotFoundException(
+        `El usuario ${usuarioId} no es colaborador del proyecto ${proyectoId}.`,
+      );
+    }
+
+    const actualizado = await this.prisma.colaborador.update({
+      where: { id: colaborador.id },
+      data: { permisoId: permiso.id },
+      select: {
+        id: true,
+        proyectoId: true,
+        usuarioId: true,
+        usuario: {
+          select: {
+            username: true,
+            persona: { select: { gmail: true } },
+          },
+        },
+      },
+    });
+
+    this.logger.log(
+      `Permiso de ${usuarioId} en el proyecto ${proyectoId} cambiado a ${rol} por creador ${creadorId}.`,
+    );
+
+    return this.mapearRespuesta(
+      {
+        id: actualizado.id,
+        proyectoId: actualizado.proyectoId,
+        usuarioId: actualizado.usuarioId,
+        username: actualizado.usuario.username,
+        gmail: actualizado.usuario.persona.gmail,
+      },
+      rol,
+    );
+  }
+
+  /**
    * Elimina un colaborador del proyecto. Solo el creador.
    *
    * @param proyectoId Identificador del proyecto.

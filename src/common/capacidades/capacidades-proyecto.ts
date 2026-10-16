@@ -57,7 +57,7 @@ export const CAPACIDADES_POR_PERMISO: Record<ClavePermiso, Capacidades> = {
 };
 
 /** Permiso por defecto al invitar a alguien sin especificar. */
-export const PERMISO_POR_DEFECTO: ClavePermiso = 'EDITOR';
+export const PERMISO_POR_DEFECTO: ClavePermiso = 'LECTOR';
 
 const PERMISOS_CONOCIDOS = Object.keys(
   CAPACIDADES_POR_PERMISO,
