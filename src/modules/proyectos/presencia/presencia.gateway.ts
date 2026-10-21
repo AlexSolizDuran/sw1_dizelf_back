@@ -40,6 +40,10 @@ export interface EstadoPresencia {
 interface EstadoCliente {
   usuarioId: number;
   proyectoId: string;
+  /** Nombre visible. Lo resuelve el servidor, no lo manda el cliente. */
+  nombre: string;
+  /** Permiso vigente. Se actualiza en vivo con `presencia:permiso`/`difundir`. */
+  rol: string;
   puedeEditar: boolean;
 }
 
@@ -99,7 +103,10 @@ export class PresenciaGateway
   async handleConnection(socket: Socket): Promise<void> {
     const proyectoId = String(socket.handshake.query?.proyectoId ?? '');
     if (!proyectoId) {
-      socket.emit('presencia:error', { mensaje: 'Falta el proyecto.' });
+      socket.emit('presencia:error', {
+        codigo: 'PROYECTO_FALTANTE',
+        mensaje: 'Falta el proyecto.',
+      });
       socket.disconnect(true);
       return;
     }
@@ -115,7 +122,10 @@ export class PresenciaGateway
       this.logger.warn(
         `Presencia rechazada: sin sesión válida en ${proyectoId}.`,
       );
-      socket.emit('presencia:error', { mensaje: 'Sesión no válida.' });
+      socket.emit('presencia:error', {
+        codigo: 'SIN_SESION',
+        mensaje: 'Sesión no válida.',
+      });
       socket.disconnect(true);
       return;
     }
@@ -129,15 +139,21 @@ export class PresenciaGateway
         `Presencia rechazada: usuario ${token.sub} en ${proyectoId} (${resultado.estado.toLowerCase()}).`,
       );
       socket.emit('presencia:error', {
+        codigo: 'SIN_ACCESO',
         mensaje: 'No podés entrar a este proyecto.',
       });
       socket.disconnect(true);
       return;
     }
 
+    // La identidad se resuelve UNA vez, del lado del servidor. El cliente solo
+    // reporta qué está mirando; nunca su nombre, rol ni permiso.
+    const nombre = await this.membresia.nombreDe(token.sub);
     const estado: EstadoCliente = {
       usuarioId: token.sub,
       proyectoId,
+      nombre,
+      rol: resultado.rol,
       puedeEditar: resultado.puedeEditar,
     };
 
@@ -145,7 +161,24 @@ export class PresenciaGateway
     // Id estable y opaca: el cliente no necesita conocer la secuencia del
     // servidor, solo desuscribirse de la sala cuando se va.
     datos(socket).presenciaId = `p${++this.connectionId}`;
-    void socket.join(this.sala(proyectoId));
+    // Estado inicial completo: sin esto, hasta el primer movimiento el usuario
+    // aparecía en la lista con nombre genérico, rol vacío y solo lectura.
+    datos(socket).ultimoEstado = {
+      usuarioId: estado.usuarioId,
+      nombre: estado.nombre,
+      rol: estado.rol,
+      puedeEditar: estado.puedeEditar,
+      nodoSeleccionado: null,
+      nivelId: null,
+      edificioId: null,
+      modo: null,
+      vista: null,
+      actualizadoEn: new Date().toISOString(),
+    };
+    // El `await` es obligatorio: si `join` es asíncrono, `difundir` arma la
+    // lista sin este socket y el recién llegado no recibe `presencia:lista`
+    // hasta que entre o salga otra persona.
+    await socket.join(this.sala(proyectoId));
 
     this.logger.log(
       `Presencia: usuario ${token.sub} (${resultado.rol}) entró en ${proyectoId}.`,
@@ -177,23 +210,107 @@ export class PresenciaGateway
     const estado = datos(socket).estado;
     if (!estado) return;
 
+    // Un LECTOR no reporta: su presencia se queda en el estado inicial. Si lo
+    // promovieron, `notificarPermiso` ya actualizó este flag.
     if (!estado.puedeEditar) return;
 
     const actual = await this.membresia.resolver(
       estado.proyectoId,
       estado.usuarioId,
     );
-    if (actual.estado !== 'MIEMBRO' || !actual.puedeEditar) {
+    if (actual.estado !== 'MIEMBRO') {
       socket.emit('presencia:error', {
+        codigo: 'SIN_ACCESO',
+        mensaje: 'Ya no tenés acceso a este proyecto.',
+      });
+      socket.disconnect(true);
+      return;
+    }
+
+    // Se refresca la identidad con lo que dice la base, no con lo que mandó el
+    // cliente: el rol pudo cambiar sin que el aviso llegue antes que este
+    // mensaje.
+    estado.rol = actual.rol;
+    estado.puedeEditar = actual.puedeEditar;
+    if (!actual.puedeEditar) {
+      socket.emit('presencia:error', {
+        codigo: 'SIN_PERMISO',
         mensaje: 'Tu permiso cambió: ya no podés editar.',
       });
       return;
     }
 
-    datos(socket).ultimoEstado = this.normalizar(parcial, estado.usuarioId);
+    datos(socket).ultimoEstado = this.normalizar(parcial, estado);
     socket
       .to(this.sala(estado.proyectoId))
       .emit('presencia:cambio', datos(socket).ultimoEstado);
+  }
+
+  /**
+   * Refleja en vivo un cambio de permiso.
+   *
+   * Actualiza el estado del socket (lo que valida los próximos mensajes) y el
+   * último estado difundido, y vuelve a mandar la lista para que todos vean el
+   * rol nuevo. El usuario puede estar en varias pestañas: se actualizan todas.
+   */
+  async notificarPermiso(
+    proyectoId: string,
+    usuarioId: number,
+    rol: string,
+    puedeEditar: boolean,
+  ): Promise<void> {
+    const sockets = await this.server.fetchSockets();
+    let toco = false;
+
+    for (const socket of sockets) {
+      const estado = datos(socket).estado;
+      if (
+        !estado ||
+        estado.proyectoId !== proyectoId ||
+        estado.usuarioId !== usuarioId
+      ) {
+        continue;
+      }
+
+      estado.rol = rol;
+      estado.puedeEditar = puedeEditar;
+      const ultimo = datos(socket).ultimoEstado;
+      if (ultimo) {
+        ultimo.rol = rol;
+        ultimo.puedeEditar = puedeEditar;
+      }
+      toco = true;
+    }
+
+    if (toco) await this.difundir(proyectoId);
+  }
+
+  /**
+   * Cierra los sockets de un colaborador eliminado.
+   *
+   * El `presencia:error` sale antes del `disconnect` para que el cliente sepa
+   * que no debe reconectar. El `handleDisconnect` de cada socket vuelve a
+   * difundir la lista sin él.
+   */
+  async expulsar(proyectoId: string, usuarioId: number): Promise<void> {
+    const sockets = await this.server.fetchSockets();
+
+    for (const socket of sockets) {
+      const estado = datos(socket).estado;
+      if (
+        !estado ||
+        estado.proyectoId !== proyectoId ||
+        estado.usuarioId !== usuarioId
+      ) {
+        continue;
+      }
+
+      socket.emit('presencia:error', {
+        codigo: 'EXPULSADO',
+        mensaje: 'Te quitaron de este proyecto.',
+      });
+      socket.disconnect(true);
+    }
   }
 
   onModuleDestroy(): void {
@@ -240,11 +357,22 @@ export class PresenciaGateway
       if (!estado) continue;
       const nombre =
         nombres.get(estado.usuarioId) ?? `Usuario ${estado.usuarioId}`;
+
+      // La identidad sale SIEMPRE del servidor. `ultimoEstado` solo aporta los
+      // campos de vista: si se difundiera tal cual, un cliente podría mandar
+      // `rol` o `puedeEditar` falsos.
+      const base = datos(socket).ultimoEstado;
+      if (base) {
+        base.nombre = nombre;
+        base.rol = estado.rol;
+        base.puedeEditar = estado.puedeEditar;
+      }
+
       presentes.push(
-        datos(socket).ultimoEstado ?? {
+        base ?? {
           usuarioId: estado.usuarioId,
           nombre,
-          rol: '',
+          rol: estado.rol,
           puedeEditar: estado.puedeEditar,
           nodoSeleccionado: null,
           nivelId: null,
@@ -259,24 +387,32 @@ export class PresenciaGateway
     this.server.to(this.sala(proyectoId)).emit('presencia:lista', presentes);
   }
 
-  /** Solo deja pasar los campos del contrato; lo demás lo descarta el cliente. */
+  /**
+   * Solo deja pasar los campos de vista; la identidad la pone el servidor.
+   *
+   * Antes esta función armaba el objeto entero con valores por defecto, y el
+   * primer `presencia:actualizar` pisaba el nombre real por `Usuario X`, el rol
+   * por `''` y el permiso por `false`. Con la identidad tomada de `estado`, un
+   * cliente no puede degradarse ni degradar a nadie.
+   */
   private normalizar(
     parcial: Partial<EstadoPresencia>,
-    usuarioId: number,
+    estado: EstadoCliente,
   ): EstadoPresencia {
     const texto = (v: unknown, max = 64): string | null =>
       typeof v === 'string' && v.length > 0 ? v.slice(0, max) : null;
 
     return {
-      usuarioId,
-      nombre: texto(parcial.nombre, 100) ?? `Usuario ${usuarioId}`,
-      rol: texto(parcial.rol, 32) ?? '',
-      puedeEditar: parcial.puedeEditar === true,
+      usuarioId: estado.usuarioId,
+      nombre: estado.nombre,
+      rol: estado.rol,
+      puedeEditar: estado.puedeEditar,
       nodoSeleccionado: texto(parcial.nodoSeleccionado, 128),
       nivelId: texto(parcial.nivelId, 128),
       edificioId: texto(parcial.edificioId, 128),
       modo: texto(parcial.modo, 64),
-      vista: parcial.vista === '3d' ? '3d' : '2d',
+      vista:
+        parcial.vista === '3d' ? '3d' : parcial.vista === '2d' ? '2d' : null,
       actualizadoEn: new Date().toISOString(),
     };
   }

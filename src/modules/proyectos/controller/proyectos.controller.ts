@@ -61,8 +61,10 @@ export class ProyectosController {
   }
 
   /**
-   * Autosave del editor. Exige `editar`: un LECTOR que entra a ver la sesión no
-   * escribe. `esquemaJson` va al documento vivo, no al proyecto.
+   * Actualiza metadatos del proyecto (hoy, el nombre).
+   *
+   * El autosave del documento ya no pasa por HTTP: lo persiste el gateway de
+   * sync. Exige `editar` porque sigue siendo una escritura del proyecto.
    */
   @Patch(':id')
   @UseGuards(ProyectoRolGuard)
@@ -89,7 +91,12 @@ export class ProyectosController {
     @CurrentUser('sub') usuarioId: number,
     @Body() dto: GuardarVersionDto,
   ): Promise<VersionRespuestaDto> {
-    return this.proyectosService.guardarVersion(id, usuarioId, dto.nombre);
+    return this.proyectosService.guardarVersion(
+      id,
+      usuarioId,
+      dto.nombre,
+      dto.esquemaJson,
+    );
   }
 
   @Get(':id/versiones')

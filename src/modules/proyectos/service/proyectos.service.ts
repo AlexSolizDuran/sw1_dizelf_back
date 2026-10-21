@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -22,7 +23,8 @@ import {
   type OrigenDocumento,
 } from '../dto/proyecto/proyecto-respuesta.dto';
 import { VersionRespuestaDto } from '../dto/proyecto/version-respuesta.dto';
-import { SyncGateway, type EscenaPlana } from '../sync/sync.gateway';
+import { SyncGateway } from '../sync/sync.gateway';
+import type { EscenaPlana } from '../sync/documento-yjs';
 import { DocumentoService } from './documento.service';
 
 /**
@@ -140,10 +142,12 @@ export class ProyectosService {
   /**
    * Detalle del proyecto para un miembro.
    *
-   * Devuelve el documento vivo si existe: `documento_colaborativo` gana sobre
-   * `proyecto.esquema_json`, que queda como el último guardado consolidado. El
-   * campo `origen` le dice al frontend de dónde salió, para que el autosave
-   * escriba en la fila correcta en vez de pisar el proyecto.
+   * Devuelve el documento vivo si existe y es más nuevo que el último guardado
+   * manual. `documento_colaborativo` lo escribe el gateway con debounce; si el
+   * usuario acaba de consolidar una versión y el gateway todavía no persistió,
+   * `proyecto.esquema_json` es el estado más reciente y hay que mostrarlo.
+   *
+   * El campo `origen` le dice al frontend de dónde salió.
    */
   async obtenerParaMiembro(
     proyectoId: string,
@@ -161,7 +165,15 @@ export class ProyectosService {
           select: { permiso: { select: { nombre: true } } },
           take: 1,
         },
-        documentos: { select: { esquemaJson: true }, take: 1 },
+        documentos: {
+          select: { esquemaJson: true, updatedAt: true },
+          take: 1,
+        },
+        versiones: {
+          select: { fecha: true },
+          orderBy: { fecha: 'desc' },
+          take: 1,
+        },
         _count: { select: { colaboradores: true } },
       },
     });
@@ -182,26 +194,31 @@ export class ProyectosService {
       );
     }
 
-    const documentoVivo = proyecto.documentos[0]?.esquemaJson;
+    const documentoVivo = proyecto.documentos[0];
+    const ultimaVersion = proyecto.versiones[0];
+    const versionMasNueva =
+      ultimaVersion !== undefined &&
+      (!documentoVivo || ultimaVersion.fecha > documentoVivo.updatedAt);
+
+    const esquemaJson = versionMasNueva
+      ? proyecto.esquemaJson
+      : documentoVivo?.esquemaJson ?? proyecto.esquemaJson;
 
     return this.mapearRespuesta(
       proyecto,
       rol,
       proyecto._count.colaboradores,
-      documentoVivo ?? proyecto.esquemaJson,
-      documentoVivo ? 'COLABORATIVO' : 'PROYECTO',
+      esquemaJson,
+      versionMasNueva || !documentoVivo ? 'PROYECTO' : 'COLABORATIVO',
     );
   }
 
   /**
-   * Escritura del autosave (el editor llama ~1 vez por segundo).
+   * Actualización de metadatos del proyecto.
    *
-   * `esquemaJson` va al documento vivo, NO al proyecto. El proyecto solo se
-   * toca en `guardarVersion`, que es el guardado manual: ahí se crea la fila en
-   * `version` y se consolida `proyecto.esquema_json`.
-   *
-   * `upsert` porque el documento vivo se crea con la primera edición: hasta
-   * entonces el editor abre siempre el documento del proyecto.
+   * El documento vivo (`documento_colaborativo`) NO se escribe acá: su único
+   * dueño es el gateway de sync, que tiene el estado CRDT mezclado de todos los
+   * clientes. Este endpoint queda para el nombre y otros metadatos futuros.
    */
   async actualizarParaMiembro(
     proyectoId: string,
@@ -209,21 +226,6 @@ export class ProyectosService {
     dto: ActualizarProyectoDto,
   ): Promise<ProyectoRespuestaDto> {
     await this.obtenerParaMiembro(proyectoId, usuarioId);
-
-    if (dto.esquemaJson !== undefined) {
-      await this.prisma.documentoColaborativo.upsert({
-        where: { proyectoId },
-        create: {
-          proyectoId,
-          usuarioId,
-          esquemaJson: dto.esquemaJson as unknown as Prisma.InputJsonValue,
-        },
-        update: {
-          usuarioId,
-          esquemaJson: dto.esquemaJson as unknown as Prisma.InputJsonValue,
-        },
-      });
-    }
 
     // El nombre sí sigue siendo del proyecto: no es del documento vivo.
     if (dto.nombre !== undefined) {
@@ -234,7 +236,7 @@ export class ProyectosService {
     }
 
     this.logger.log(
-      `Documento de ${proyectoId} actualizado por usuario ${usuarioId}.`,
+      `Proyecto ${proyectoId} actualizado por usuario ${usuarioId}.`,
     );
 
     return this.obtenerParaMiembro(proyectoId, usuarioId);
@@ -248,12 +250,21 @@ export class ProyectosService {
    * queda respaldado: si se pierde la fila de `documento_colaborativo`, se
    * recupera desde la última versión guardada.
    *
+   * El contenido viene del cliente que está guardando: es la escena que el
+   * usuario tiene en pantalla. Leerla de la base haría que la versión quedara
+   * atrás del `Y.Doc` del gateway, que persiste con debounce.
+   *
+   * No se escribe `documento_colaborativo`: el documento vivo es del gateway.
+   *
    * @param nombre Etiqueta opcional para reconocer la versión en el historial.
+   * @param esquemaJson Documento actual del cliente. Si no viene, se usa el
+   *   documento vivo o el último consolidado (compatibilidad).
    */
   async guardarVersion(
     proyectoId: string,
     usuarioId: number,
     nombre?: string,
+    esquemaJson?: Record<string, unknown>,
   ): Promise<VersionRespuestaDto> {
     await this.obtenerParaMiembro(proyectoId, usuarioId);
 
@@ -262,13 +273,21 @@ export class ProyectosService {
       select: { esquemaJson: true },
     });
 
-    const vigente = await this.prisma.documentoColaborativo.findUnique({
-      where: { proyectoId },
-      select: { esquemaJson: true },
-    });
-
-    // Sin documento vivo se versiona el proyecto: es el único estado que hay.
-    const contenido = vigente?.esquemaJson ?? proyecto.esquemaJson;
+    let contenido: unknown;
+    if (esquemaJson !== undefined) {
+      // Se valida con el mismo desenvoltorio que usa el gateway: tiene que
+      // haber una escena, no un objeto cualquiera.
+      if (!this.documento.desenvolver(esquemaJson)) {
+        throw new BadRequestException(
+          'El documento no contiene una escena válida.',
+        );
+      }
+      contenido = esquemaJson;
+    } else {
+      // Sin body (cliente viejo): se versiona el estado más nuevo conocido, con
+      // la misma comparación de fechas que usa el gateway.
+      contenido = (await this.documento.leer(proyectoId)) ?? proyecto.esquemaJson;
+    }
 
     const [version] = await this.prisma.$transaction([
       this.prisma.version.create({
@@ -343,12 +362,28 @@ export class ProyectosService {
     }
 
     const contenido = version.esquemaJson as unknown as Prisma.InputJsonValue;
+    const escena = this.documento.desenvolver(contenido);
+
+    if (!escena) {
+      throw new BadRequestException(
+        'La versión no contiene una escena válida.',
+      );
+    }
 
     await this.prisma.$transaction([
       this.prisma.documentoColaborativo.upsert({
         where: { proyectoId },
-        create: { proyectoId, usuarioId, esquemaJson: contenido },
-        update: { usuarioId, esquemaJson: contenido },
+        // El documento vivo guarda la escena cruda, igual que el gateway.
+        // `proyecto.esquema_json` conserva el sobre con `version` y `vista`.
+        create: {
+          proyectoId,
+          usuarioId,
+          esquemaJson: escena as unknown as Prisma.InputJsonValue,
+        },
+        update: {
+          usuarioId,
+          esquemaJson: escena as unknown as Prisma.InputJsonValue,
+        },
       }),
       this.prisma.proyecto.update({
         where: { id: proyectoId },
@@ -359,8 +394,7 @@ export class ProyectosService {
     // La base ya quedó con lo restaurado, pero el gateway mantiene el doc vivo
     // en memoria: si no se corrige acá, el próximo guardado o el disconnect lo
     // volvería a pisar con la escena vieja.
-    const escena = this.documento.desenvolver(contenido) as EscenaPlana | null;
-    this.sync.aplicarRestauracion(proyectoId, escena);
+    this.sync.aplicarRestauracion(proyectoId, escena as EscenaPlana);
 
     this.logger.log(
       `Versión ${versionId} del proyecto ${proyectoId} restaurada por ${usuarioId}.`,

@@ -1,4 +1,5 @@
 import * as Y from 'yjs';
+import { sembrarDocumento, type EscenaPlana } from './documento-yjs';
 
 /**
  * El CRDT con la granularidad que usa el gateway: un `Y.Map` por nodo.
@@ -133,5 +134,37 @@ describe('SyncGateway — Y.Doc del plano', () => {
     Y.applyUpdate(b, update);
 
     expect(nodosDe(b).wall_1.height).toBe(3);
+  });
+});
+
+/**
+ * El sembrado es el punto donde un doc vacío puede borrar partes del documento:
+ * si el gateway solo carga nodos y raíces, el primer persist deja
+ * `collections`, `materials` e `installedPlugins` en `{}` y el editor las pierde
+ * al reabrir.
+ */
+describe('Sembrado del documento', () => {
+  it('siembra las cinco estructuras y deduplica raíces y plugins', () => {
+    const escena: EscenaPlana = {
+      nodes: { site_default: { type: 'site' } },
+      rootNodeIds: ['site_default', 'site_default'],
+      collections: { col_1: { id: 'col_1', name: 'Planta baja' } },
+      materials: { mat_1: { id: 'mat_1', name: 'Hormigón' } },
+      installedPlugins: ['pascal:trees', 'pascal:trees'],
+    };
+
+    const doc = sembrarDocumento(escena);
+
+    expect(doc.getMap('scene:nodes').toJSON()).toEqual({
+      site_default: { type: 'site' },
+    });
+    expect(doc.getArray('scene:roots').toJSON()).toEqual(['site_default']);
+    expect(doc.getArray('scene:plugins').toJSON()).toEqual(['pascal:trees']);
+    expect(doc.getMap('scene:collections').toJSON()).toEqual({
+      col_1: { id: 'col_1', name: 'Planta baja' },
+    });
+    expect(doc.getMap('scene:materials').toJSON()).toEqual({
+      mat_1: { id: 'mat_1', name: 'Hormigón' },
+    });
   });
 });

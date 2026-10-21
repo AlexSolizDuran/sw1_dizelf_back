@@ -2,8 +2,9 @@
  * De dónde viene el documento que está mostrando el editor.
  *
  * `COLABORATIVO` es el documento vivo (`documento_colaborativo`), que gana
- * sobre `proyecto.esquema_json`. El frontend lo usa para decidir a dónde
- * guarda: el autosave va al documento vivo, nunca al proyecto.
+ * sobre `proyecto.esquema_json`. `PROYECTO` es el último guardado consolidado o
+ * una versión más nueva que la última persistencia del gateway. Es informativo:
+ * el documento vivo siempre lo escribe el gateway.
  */
 export type OrigenDocumento = 'COLABORATIVO' | 'PROYECTO';
 

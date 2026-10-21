@@ -2,9 +2,9 @@
  * Documento vivo del plano.
  *
  * Es lo que ve el editor cuando existe: gana sobre `proyecto.esquema_json`,
- * que queda como el último guardado consolidado. El autosave del editor (1 s)
- * escribe acá; `proyecto.esquema_json` solo se actualiza en el guardado manual,
- * que además deja una fila en `version`.
+ * que queda como el último guardado consolidado. El gateway de sync es el único
+ * que escribe acá; `proyecto.esquema_json` solo se actualiza en el guardado
+ * manual, que además deja una fila en `version`.
  *
  * Relación 1:1 con `Proyecto`: hay un solo documento vivo por proyecto, y el
  * `@@unique` es lo que permite saber cuál es sin una consulta de "el más

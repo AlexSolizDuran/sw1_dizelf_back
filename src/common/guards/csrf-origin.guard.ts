@@ -25,9 +25,9 @@ const normalizar = (origen: string): string => origen.trim().replace(/\/$/, '');
  *
  * CORS no cierra esto: bloquea que el navegador *lea* la respuesta, no que la
  * petición *se envíe*. Un `<form>` en un sitio ajeno dispara la petición con la
- * cookie del usuario y el backend la ejecuta. El caso más grave acá es
- * `PATCH /proyectos/:id`, que sobreescribe el `esquema_json` completo: un
- * atacante podría vaciarle el plano a otra persona.
+ * cookie del usuario y el backend la ejecuta. El caso más grave acá son los
+ * endpoints que escriben el documento completo (`POST /proyectos/:id/versiones`
+ * y restaurar): un atacante podría vaciarle el plano a otra persona.
  *
  * POR QUÉ `Origin` Y NO SOLO UN TOKEN: no requiere cambios en el frontend ni
  * una segunda cookie. `Origin` no es falsificable desde el navegador y todos

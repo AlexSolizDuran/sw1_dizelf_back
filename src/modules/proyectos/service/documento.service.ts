@@ -2,15 +2,17 @@ import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import * as Y from 'yjs';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { materializarDocumento } from '../sync/documento-yjs';
 
 /**
  * Lectura y escritura del documento vivo del plano.
  *
  * LA DIRECCIÓN DE LA CONVERSIÓN
  * -----------------------------
- * Del CRDT a la base es materializar (Y.Doc → JSON plano). Al revés no: la base
- * guarda JSON, y sembrar un doc desde ahí lo hace el gateway. Aquí solo está el
- * camino de salida, que es el que corre con frecuencia.
+ * Del CRDT a la base es materializar (Y.Doc → JSON plano), en
+ * `sync/documento-yjs.ts`. Al revés no: la base guarda JSON, y sembrar un doc
+ * desde ahí lo hace el gateway. Aquí solo está el camino de salida, que es el
+ * que corre con frecuencia.
  *
  * POR QUÉ JSON Y NO EL BINARIO DE YJS
  * ----------------------------------
@@ -19,16 +21,21 @@ import { PrismaService } from '../../../common/prisma/prisma.service';
  * obligaría a que cada lector materialize, y a que un solo reader desactualizado
  * se vea como plano perdido.
  *
- * `materializar` es puramente estructural: los `toJSON()` de Y.Map y Y.Array
- * dan las dos estructuras que importan. El backend no sabe qué es un `wall`.
+ * `materializarDocumento` es puramente estructural: los `toJSON()` de Y.Map y
+ * Y.Array dan las cinco estructuras que importan. El backend no sabe qué es un
+ * `wall`.
  */
 @Injectable()
 export class DocumentoService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Escena vigente del proyecto: el documento vivo si existe, y si no el último
-   * guardado consolidado.
+   * Escena vigente del proyecto para sembrar el gateway.
+   *
+   * Normalmente gana el documento vivo. La excepción es un guardado manual más
+   * nuevo que la última persistencia del gateway (por ejemplo, si el socket
+   * estaba caído): ahí `proyecto.esquema_json` es lo más reciente y sembrar el
+   * doc viejo lo volvería a persistir, borrando la versión recién guardada.
    *
    * EL FALLBACK NO ES OPCIONAL. Sin él, el primer cliente que abre un proyecto
    * que nadie editó desde que se migró lee un `Y.Doc` vacío, y el primer
@@ -41,13 +48,30 @@ export class DocumentoService {
       where: { id: proyectoId },
       select: {
         esquemaJson: true,
-        documentos: { select: { esquemaJson: true }, take: 1 },
+        documentos: {
+          select: { esquemaJson: true, updatedAt: true },
+          take: 1,
+        },
+        versiones: {
+          select: { fecha: true },
+          orderBy: { fecha: 'desc' },
+          take: 1,
+        },
       },
     });
 
     if (!proyecto) return null;
 
-    const bruto = proyecto.documentos[0]?.esquemaJson ?? proyecto.esquemaJson;
+    const documentoVivo = proyecto.documentos[0];
+    const ultimaVersion = proyecto.versiones[0];
+    const versionMasNueva =
+      ultimaVersion !== undefined &&
+      (!documentoVivo || ultimaVersion.fecha > documentoVivo.updatedAt);
+
+    const bruto = versionMasNueva
+      ? proyecto.esquemaJson
+      : documentoVivo?.esquemaJson ?? proyecto.esquemaJson;
+
     return this.desenvolver(bruto);
   }
 
@@ -81,7 +105,7 @@ export class DocumentoService {
    * que sí es por guardado manual.
    */
   async guardarMaterializado(proyectoId: string, doc: Y.Doc): Promise<void> {
-    const escena = this.materializar(doc);
+    const escena = materializarDocumento(doc);
 
     await this.prisma.documentoColaborativo.upsert({
       where: { proyectoId },
@@ -91,18 +115,5 @@ export class DocumentoService {
       },
       update: { esquemaJson: escena as unknown as Prisma.InputJsonValue },
     });
-  }
-
-  /** `Y.Doc` → la forma plana que el cliente y la base entienden. */
-  private materializar(doc: Y.Doc): Record<string, unknown> {
-    return {
-      nodes: doc.getMap('scene:nodes').toJSON(),
-      // Se deduplica al persistir: una raíz repetida ya rompió el editor una vez
-      // (cientos de `site_default`, clave de React repetida y flood de WebGPU).
-      rootNodeIds: [...new Set(doc.getArray<string>('scene:roots').toJSON())],
-      collections: doc.getMap('scene:collections').toJSON(),
-      materials: doc.getMap('scene:materials').toJSON(),
-      installedPlugins: doc.getArray('scene:plugins').toJSON(),
-    };
   }
 }

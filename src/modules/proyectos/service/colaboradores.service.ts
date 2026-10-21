@@ -12,6 +12,8 @@ import {
   capacidadesDe,
 } from '../../../common/capacidades/capacidades-proyecto';
 import { ColaboradorRespuestaDto } from '../dto/colaborador/colaborador-respuesta.dto';
+import { PresenciaGateway } from '../presencia/presencia.gateway';
+import { SyncGateway } from '../sync/sync.gateway';
 
 type ColaboradorBase = {
   id: number;
@@ -32,7 +34,11 @@ type ColaboradorBase = {
 export class ColaboradoresService {
   private readonly logger = new Logger(ColaboradoresService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly sync: SyncGateway,
+    private readonly presencia: PresenciaGateway,
+  ) {}
 
   /**
    * Agrega un colaborador al proyecto por username o gmail exactos.
@@ -227,6 +233,11 @@ export class ColaboradoresService {
       `Permiso de ${usuarioId} en el proyecto ${proyectoId} cambiado a ${rol} por creador ${creadorId}.`,
     );
 
+    // La base ya quedó actualizada: si falla el aviso, se registra y la
+    // respuesta sigue siendo 200. El próximo mensaje del gateway revalida
+    // contra la base, así que el permiso nuevo se aplica igual.
+    await this.avisarPermiso(proyectoId, usuarioId, rol);
+
     return this.mapearRespuesta(
       {
         id: actualizado.id,
@@ -287,6 +298,10 @@ export class ColaboradoresService {
       `Colaborador ${usuarioId} eliminado del proyecto ${proyectoId} por creador ${creadorId}.`,
     );
 
+    // Cerrar los sockets es parte de la eliminación: sin esto el usuario
+    // expulsado seguiría viendo el plano en vivo hasta recargar.
+    await this.expulsar(proyectoId, usuarioId);
+
     return { message: 'Colaborador eliminado exitosamente.' };
   }
 
@@ -327,6 +342,69 @@ export class ColaboradoresService {
         c.permiso.nombre,
       ),
     );
+  }
+
+  /**
+   * Avisa a sync y presencia que el permiso cambió.
+   *
+   * Cada gateway se notifica por separado: si uno falla, el otro igual recibe
+   * el cambio. La base ya está actualizada y los gateways revalidan contra ella
+   * en cada mensaje, así que un aviso perdido no deja el sistema inconsistente:
+   * como mucho, la UI tarda en reflejarlo.
+   */
+  private async avisarPermiso(
+    proyectoId: string,
+    usuarioId: number,
+    rol: string,
+  ): Promise<void> {
+    const puedeEditar = capacidadesDe(rol).puedeEditar;
+
+    try {
+      await this.sync.notificarPermiso(proyectoId, usuarioId, rol, puedeEditar);
+    } catch (error) {
+      this.logger.error(
+        `No se pudo avisar el permiso por sync a ${usuarioId} en ${proyectoId}.`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
+
+    try {
+      await this.presencia.notificarPermiso(
+        proyectoId,
+        usuarioId,
+        rol,
+        puedeEditar,
+      );
+    } catch (error) {
+      this.logger.error(
+        `No se pudo avisar el permiso por presencia a ${usuarioId} en ${proyectoId}.`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
+  }
+
+  /** Cierra los sockets del colaborador eliminado, canal por canal. */
+  private async expulsar(
+    proyectoId: string,
+    usuarioId: number,
+  ): Promise<void> {
+    try {
+      await this.sync.expulsar(proyectoId, usuarioId);
+    } catch (error) {
+      this.logger.error(
+        `No se pudo cerrar el socket de sync de ${usuarioId} en ${proyectoId}.`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
+
+    try {
+      await this.presencia.expulsar(proyectoId, usuarioId);
+    } catch (error) {
+      this.logger.error(
+        `No se pudo cerrar el socket de presencia de ${usuarioId} en ${proyectoId}.`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
   }
 
   /**

@@ -10,21 +10,10 @@ import {
 } from '@nestjs/websockets';
 import * as Y from 'yjs';
 import type { Server, Socket } from 'socket.io';
+import { sembrarDocumento, type EscenaPlana } from './documento-yjs';
 import { TokenVerificadorService } from '../../../common/auth/token-verificador.service';
 import { MembresiaService } from '../service/membresia.service';
 import { DocumentoService } from '../service/documento.service';
-
-/**
- * Nombres de las estructuras del documento.
- *
- * Replicados del cliente (`lib/editor/y-bridge.ts`). Si divergen, el cliente
- * recibe un doc vacío y parece que el plano se perdió, así que el contrato está
- * duplicado a propósito y documentado en los dos lados.
- */
-const CLAVES = {
-  nodes: 'scene:nodes',
-  roots: 'scene:roots',
-} as const;
 
 /** Documento vivo de un proyecto. Vive mientras haya alguien conectado. */
 interface Sesion {
@@ -40,6 +29,8 @@ interface Sesion {
 interface EstadoSocket {
   usuarioId: number;
   proyectoId: string;
+  /** Nombre del permiso vigente. Se actualiza en vivo con `sync:permiso`. */
+  rol: string;
   puedeEditar: boolean;
   /**
    * Generación del doc que este socket tiene aplicada. Empieza en `-1` (todavía
@@ -50,12 +41,9 @@ interface EstadoSocket {
   epoch: number;
 }
 
-export interface EscenaPlana {
-  nodes?: Record<string, unknown>;
-  rootNodeIds?: string[];
-}
-
-const datos = (socket: Socket): { estado?: EstadoSocket } =>
+// Acepta `Socket` y `RemoteSocket` (lo que devuelve `fetchSockets()`): ambos
+// traen `data`, y es lo único que se lee de ellos.
+const datos = (socket: { data: unknown }): { estado?: EstadoSocket } =>
   socket.data as { estado?: EstadoSocket };
 
 const estadoDe = (socket: Socket): EstadoSocket | undefined =>
@@ -73,8 +61,8 @@ const estadoDe = (socket: Socket): EstadoSocket | undefined =>
  * ---------------
  * Lo que se guarda en `documento_colaborativo` es la escena MATERIALIZADA, no el
  * binario de Yjs, y la columna es JSONB. Materializar es estructural: los
- * `toJSON()` de Y.Map y Y.Array dan las dos estructuras que importan y listo. Así
- * el resto del sistema sigue leyendo el documento como un objeto, y
+ * `toJSON()` de Y.Map y Y.Array dan las cinco estructuras que importan y listo.
+ * Así el resto del sistema sigue leyendo el documento como un objeto, y
  * `GET /proyectos/:id` no cambia.
  *
  * Se persiste con debounce: una sesión genera updates varias veces por segundo
@@ -130,7 +118,10 @@ export class SyncGateway
   async handleConnection(socket: Socket): Promise<void> {
     const proyectoId = String(socket.handshake.query?.proyectoId ?? '');
     if (!proyectoId) {
-      socket.emit('sync:error', { mensaje: 'Falta el proyecto.' });
+      socket.emit('sync:error', {
+        codigo: 'PROYECTO_FALTANTE',
+        mensaje: 'Falta el proyecto.',
+      });
       socket.disconnect(true);
       return;
     }
@@ -141,7 +132,10 @@ export class SyncGateway
     });
     if (!token) {
       this.logger.warn(`Sync rechazada: sin sesión válida en ${proyectoId}.`);
-      socket.emit('sync:error', { mensaje: 'Sesión no válida.' });
+      socket.emit('sync:error', {
+        codigo: 'SIN_SESION',
+        mensaje: 'Sesión no válida.',
+      });
       socket.disconnect(true);
       return;
     }
@@ -152,6 +146,7 @@ export class SyncGateway
         `Sync rechazada: usuario ${token.sub} en ${proyectoId} (${miembro.estado.toLowerCase()}).`,
       );
       socket.emit('sync:error', {
+        codigo: 'SIN_ACCESO',
         mensaje: 'No podés entrar a este proyecto.',
       });
       socket.disconnect(true);
@@ -164,12 +159,21 @@ export class SyncGateway
     datos(socket).estado = {
       usuarioId: token.sub,
       proyectoId,
+      rol: miembro.rol,
       puedeEditar: miembro.puedeEditar,
       epoch: -1,
     } satisfies EstadoSocket;
-    void socket.join(this.sala(proyectoId));
+    // Se espera el join: si es asíncrono, un re-seed entre este punto y el
+    // `sync:inicial` dejaría al socket fuera de la sala y perdería el estado
+    // re-sembrado.
+    await socket.join(this.sala(proyectoId));
 
-    socket.emit('sync:inicial', Y.encodeStateAsUpdate(sesion.doc));
+    // `reemplazar: false` = reconexión normal: el cliente FUSIONA este estado
+    // con su doc local en vez de destruirlo. Así conserva lo que editó mientras
+    // estuvo desconectado. La restauración de versión manda `true`.
+    socket.emit('sync:inicial', Y.encodeStateAsUpdate(sesion.doc), {
+      reemplazar: false,
+    });
 
     this.logger.log(
       `Sync: usuario ${token.sub} (${miembro.rol}) en ${proyectoId}. Presentes: ${sesion.refCount}.`,
@@ -215,8 +219,20 @@ export class SyncGateway
       estado.proyectoId,
       estado.usuarioId,
     );
-    if (actual.estado !== 'MIEMBRO' || !actual.puedeEditar) {
+    if (actual.estado !== 'MIEMBRO') {
       socket.emit('sync:error', {
+        codigo: 'SIN_ACCESO',
+        mensaje: 'Ya no tenés acceso a este proyecto.',
+      });
+      socket.disconnect(true);
+      return;
+    }
+
+    estado.rol = actual.rol;
+    estado.puedeEditar = actual.puedeEditar;
+    if (!actual.puedeEditar) {
+      socket.emit('sync:error', {
+        codigo: 'SIN_PERMISO',
         mensaje: 'Tu permiso cambió: ya no podés editar.',
       });
       return;
@@ -249,6 +265,65 @@ export class SyncGateway
   }
 
   /**
+   * Avisa en vivo que el permiso de un usuario cambió.
+   *
+   * Se recorren los sockets del namespace y no se revalida acá: quien llama ya
+   * actualizó la base y conoce el rol nuevo. Si el usuario tiene dos pestañas,
+   * las dos reciben el aviso.
+   */
+  async notificarPermiso(
+    proyectoId: string,
+    usuarioId: number,
+    rol: string,
+    puedeEditar: boolean,
+  ): Promise<void> {
+    const sockets = await this.server.fetchSockets();
+
+    for (const socket of sockets) {
+      const estado = datos(socket).estado;
+      if (
+        !estado ||
+        estado.proyectoId !== proyectoId ||
+        estado.usuarioId !== usuarioId
+      ) {
+        continue;
+      }
+
+      estado.rol = rol;
+      estado.puedeEditar = puedeEditar;
+      socket.emit('sync:permiso', { rol, puedeEditar });
+    }
+  }
+
+  /**
+   * Cierra los sockets de un colaborador eliminado.
+   *
+   * El `sync:error` sale antes del `disconnect` para que el cliente sepa por
+   * qué se cerró y no intente reconectar. El servidor no puede volver a
+   * aceptarlo: la membresía ya no existe.
+   */
+  async expulsar(proyectoId: string, usuarioId: number): Promise<void> {
+    const sockets = await this.server.fetchSockets();
+
+    for (const socket of sockets) {
+      const estado = datos(socket).estado;
+      if (
+        !estado ||
+        estado.proyectoId !== proyectoId ||
+        estado.usuarioId !== usuarioId
+      ) {
+        continue;
+      }
+
+      socket.emit('sync:error', {
+        codigo: 'EXPULSADO',
+        mensaje: 'Te quitaron de este proyecto.',
+      });
+      socket.disconnect(true);
+    }
+  }
+
+  /**
    * Impone el estado restaurado sobre la sesión en vivo.
    *
    * Restaurar una versión escribe la base, pero el gateway es la fuente de
@@ -259,7 +334,10 @@ export class SyncGateway
    *
    * Se emite `sync:inicial`, NO `sync:update`: el cliente lo aplica con
    * `setScene`, que reemplaza la escena entera. Con un update suelto —fusión
-   * CRDT— los nodos que el cliente tenía de más no se borrarían.
+   * CRDT— los nodos que el cliente tenía de más no se borrarían. El segundo
+   * argumento `reemplazar: true` le dice al cliente que descarte su doc local;
+   * en una reconexión normal ese mismo evento llega con `false` y el cliente
+   * fusiona.
    *
    * Sin sesión no hay nada que corregir: la base ya tiene lo restaurado y el
    * próximo que entre siembra desde ahí.
@@ -276,7 +354,7 @@ export class SyncGateway
     }
 
     sesion.doc.destroy();
-    sesion.doc = this.sembrar(escena);
+    sesion.doc = sembrarDocumento(escena);
     // Nueva generación: los sockets quedan desactualizados hasta que apliquen
     // el `sync:inicial` de abajo y lo confirmen con `sync:listo`.
     sesion.epoch += 1;
@@ -286,7 +364,9 @@ export class SyncGateway
 
     this.server
       ?.to(this.sala(proyectoId))
-      .emit('sync:inicial', Y.encodeStateAsUpdate(sesion.doc));
+      .emit('sync:inicial', Y.encodeStateAsUpdate(sesion.doc), {
+        reemplazar: true,
+      });
 
     this.logger.log(
       `Sync: documento de ${proyectoId} re-sembrado con la versión restaurada.`,
@@ -321,7 +401,7 @@ export class SyncGateway
     if (!pendiente) {
       pendiente = (async () => {
         const escena = await this.documento.leer(proyectoId);
-        const doc = this.sembrar(escena);
+        const doc = sembrarDocumento(escena);
         const sesion: Sesion = {
           doc,
           refCount: 0,
@@ -344,38 +424,6 @@ export class SyncGateway
         this.creando.delete(proyectoId);
       }
     }
-  }
-
-  /**
-   * Siembra el `Y.Doc` con la escena que hay en la base.
-   *
-   * Estructural otra vez: `Y.Map` por nodo y `Y.Array` para las raíces. El
-   * backend no mira qué tipo de nodo es, solo qué claves tiene.
-   */
-  private sembrar(escena: EscenaPlana | null): Y.Doc {
-    const doc = new Y.Doc();
-    if (!escena || Object.keys(escena).length === 0) return doc;
-
-    doc.transact(() => {
-      const nodos = doc.getMap<Y.Map<unknown>>(CLAVES.nodes);
-      for (const [id, nodo] of Object.entries(escena.nodes ?? {})) {
-        const mapa = new Y.Map<unknown>();
-        for (const [clave, valor] of Object.entries(
-          nodo as Record<string, unknown>,
-        )) {
-          if (valor !== undefined) mapa.set(clave, valor);
-        }
-        nodos.set(id, mapa);
-      }
-      // `Set`: una raíz repetida en la base multiplica el render (React clavea
-      // por id y monta un `site` por copia) y termina tirando WebGPU. Sembrar
-      // limpio corta la recursión.
-      doc
-        .getArray<string>(CLAVES.roots)
-        .push([...new Set(escena.rootNodeIds ?? [])]);
-    }, 'semilla');
-
-    return doc;
   }
 
   private programarPersistencia(proyectoId: string, sesion: Sesion): void {
