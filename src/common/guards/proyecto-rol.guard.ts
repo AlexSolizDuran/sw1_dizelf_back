@@ -9,28 +9,45 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
-import { PrismaService } from '../prisma/prisma.service';
-import { RolProyecto } from '../../modules/proyectos/enums/rol-proyecto.enum';
+import { MembresiaService } from '../../modules/proyectos/service/membresia.service';
+import type { Capacidades } from '../capacidades/capacidades-proyecto';
 import type { JwtPayload } from '../../modules/auth/interfaces/jwt-payload.interface';
-import { ROLES_PROYECTO_KEY } from '../decorators/roles-proyecto.decorator';
+import { CAPACIDAD_PROYECTO_KEY } from '../decorators/capacidad-proyecto.decorator';
+
+export type Capacidad = 'leer' | 'editar' | 'invitar' | 'administrar';
 
 type SolicitudConUsuario = Request & {
   user?: JwtPayload;
-  rolProyecto?: RolProyecto;
+  /** Capacidades ya resueltas contra la base. */
+  capacidadesProyecto?: Capacidades;
+  /** `CREADOR` si es dueño; si no, el nombre del permiso de la tabla. */
+  rolProyecto?: string;
 };
 
+/**
+ * Guardia de proyecto: resuelve la membresía contra la base y exige una
+ * capacidad concreta.
+ *
+ * Antes comparaba contra el enum `RolProyecto` sin mirar la tabla `permiso`:
+ * seleccionaba `{ usuarioId: true }` y deducía el rol por la forma de la
+ * relación. Sembrar `LECTOR` en `permiso` no concedía nada, porque todo
+ * colaborador quedaba clasificado como `INVITADO` sin consultar su permiso.
+ *
+ * Ahora trae `permiso.nombre` de la base y traduce a capacidades. El catálogo
+ * es dato: agregar un permiso es un `INSERT`, no un deploy.
+ */
 @Injectable()
 export class ProyectoRolGuard implements CanActivate {
   private readonly logger = new Logger(ProyectoRolGuard.name);
 
   constructor(
     private readonly reflector: Reflector,
-    private readonly prisma: PrismaService,
+    private readonly membresia: MembresiaService,
   ) {}
 
   async canActivate(contexto: ExecutionContext): Promise<boolean> {
-    const rolesExigidos =
-      this.reflector.getAllAndOverride<RolProyecto[]>(ROLES_PROYECTO_KEY, [
+    const capacidadesExigidas =
+      this.reflector.getAllAndOverride<Capacidad[]>(CAPACIDAD_PROYECTO_KEY, [
         contexto.getHandler(),
         contexto.getClass(),
       ]) ?? [];
@@ -50,32 +67,15 @@ export class ProyectoRolGuard implements CanActivate {
       );
     }
 
-    const proyecto = await this.prisma.proyecto.findUnique({
-      where: { id: proyectoId },
-      select: {
-        id: true,
-        creadorId: true,
-        colaboradores: {
-          where: { usuarioId: usuario.sub },
-          select: { usuarioId: true },
-        },
-      },
-    });
+    const resultado = await this.membresia.resolver(proyectoId, usuario.sub);
 
-    if (!proyecto) {
+    if (resultado.estado === 'NO_EXISTE') {
       throw new NotFoundException(
         `Proyecto con ID ${proyectoId} no encontrado.`,
       );
     }
 
-    const rol: RolProyecto | null =
-      proyecto.creadorId === usuario.sub
-        ? RolProyecto.CREADOR
-        : proyecto.colaboradores.length > 0
-          ? RolProyecto.INVITADO
-          : null;
-
-    if (!rol) {
+    if (resultado.estado === 'NO_MIEMBRO') {
       this.logger.warn(
         `Acceso denegado: usuario ${usuario.sub} no es miembro del proyecto ${proyectoId}.`,
       );
@@ -84,19 +84,47 @@ export class ProyectoRolGuard implements CanActivate {
       );
     }
 
-    solicitud.rolProyecto = rol;
+    // Se adjuntan a la solicitud para que los servicios no vuelvan a consultar.
+    solicitud.capacidadesProyecto = resultado;
+    solicitud.rolProyecto = resultado.rol;
 
-    if (rolesExigidos.length > 0 && !rolesExigidos.includes(rol)) {
+    const faltante = capacidadesExigidas.find(
+      (capacidad) => !cumple(resultado, capacidad),
+    );
+
+    if (faltante) {
       this.logger.warn(
-        `Acceso denegado: usuario ${usuario.sub} con rol ${rol} intentó acceder al proyecto ${proyectoId} (requiere: ${rolesExigidos.join(', ')}).`,
+        `Acceso denegado: usuario ${usuario.sub} con rol ${resultado.rol} intentó ${contexto.getClass().name}.${contexto.getHandler().name} (requiere: ${faltante}).`,
       );
-      throw new ForbiddenException(
-        rolesExigidos.length === 1 && rolesExigidos[0] === RolProyecto.CREADOR
-          ? 'Acceso denegado: Solo el usuario con rol CREADOR puede realizar esta acción.'
-          : `Acceso denegado: Se requiere uno de los roles: ${rolesExigidos.join(', ')}.`,
-      );
+      throw new ForbiddenException(mensajeDeFalta(faltante));
     }
 
     return true;
+  }
+}
+
+function cumple(capacidades: Capacidades, capacidad: Capacidad): boolean {
+  switch (capacidad) {
+    case 'leer':
+      return true;
+    case 'editar':
+      return capacidades.puedeEditar;
+    case 'invitar':
+      return capacidades.puedeInvitar;
+    case 'administrar':
+      return capacidades.puedeAdministrar;
+  }
+}
+
+function mensajeDeFalta(capacidad: Capacidad): string {
+  switch (capacidad) {
+    case 'editar':
+      return 'Acceso denegado: Tu permiso en este proyecto es de solo lectura.';
+    case 'invitar':
+      return 'Acceso denegado: Solo el creador del proyecto puede invitar colaboradores.';
+    case 'administrar':
+      return 'Acceso denegado: Solo el creador del proyecto puede administrarlo.';
+    default:
+      return 'Acceso denegado.';
   }
 }

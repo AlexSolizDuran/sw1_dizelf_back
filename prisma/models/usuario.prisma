@@ -8,8 +8,10 @@ model Usuario {
   persona   Persona @relation(fields: [personaId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   // Campos virtuales inversos: no generan columna.
-  proyectosCreados Proyecto[]
-  colaboraciones   Colaborador[]
+  proyectosCreados    Proyecto[]
+  colaboraciones      Colaborador[]
+  documentosEditados  DocumentoColaborativo[]
+  presupuestosCreados Presupuesto[]
 
   @@map("usuario")
 }
