@@ -10,6 +10,7 @@ import appConfig from './config/env.config';
 import { envValidationSchema } from './config/env.validation';
 import { AuthModule } from './modules/auth/auth.module';
 import { ProyectosModule } from './modules/proyectos/module/proyectos.module';
+import { PresupuestosModule } from './modules/presupuestos/module/presupuestos.module';
 import { UsuariosModule } from './modules/usuarios/usuarios.module';
 
 @Module({
@@ -23,6 +24,7 @@ import { UsuariosModule } from './modules/usuarios/usuarios.module';
     UsuariosModule,
     AuthModule,
     ProyectosModule,
+    PresupuestosModule,
   ],
   controllers: [AppController],
   providers: [

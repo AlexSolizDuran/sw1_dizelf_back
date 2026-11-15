@@ -1,0 +1,85 @@
+/**
+ * Presupuesto de materiales de un plano.
+ * Es un SNAPSHOT, no una vista calculada: si el proveedor sube el cemento en
+ * marzo, el presupuesto de febrero debe seguir diciendo lo mismo. Por eso cada
+ * línea congela cantidad, precio y fuente, y la cabecera guarda `documentoHash`
+ * del plano que se midió, para poder avisar "el plano cambió desde entonces"
+ * sin recalcular nada.
+ * OPCIÓN MÍNIMA (2 tablas). No hay catálogo de materiales ni historial de
+ * precios: la fuente del precio vive como JSON dentro de la línea y la clave
+ * del material es texto (`claveMaterial`). La contrapartida es que no se puede
+ * comparar proveedores ni consultar "cuánto costaba hace tres meses". Si eso
+ * hace falta, el camino a las 6 tablas es aditivo (ver
+ * `informes/presupuesto-base-datos.md`).
+ * La moneda base es BOB porque los proveedores publican en bolivianos; el tipo
+ * de cambio se congela acá y el monto en USD se deriva al leer, de modo que un
+ * presupuesto viejo no cambia de valor en dólares cuando se mueva la tasa.
+ */
+model Presupuesto {
+  id                String   @id @default(uuid()) @map("presupuesto_id") @db.Uuid
+  proyectoId        String   @map("proyecto_id") @db.Uuid
+  creadorId         Int      @map("usuario_id")
+  nombre            String   @map("nombre_presupuesto") @db.VarChar(120)
+  monedaBase        String   @default("BOB") @map("moneda_base") @db.Char(3)
+  tipoCambioUsd     Decimal  @map("tipo_cambio_usd") @db.Decimal(12, 4)
+  /**
+   * De dónde salió la tasa: `manual` (la escribe el usuario) u `oficial`.
+   */
+  tipoCambioFuente  String   @map("tipo_cambio_fuente") @db.VarChar(20)
+  /**
+   * Versión de las recetas de consumo (APU) con las que se midió.
+   */
+  recetaVersion     String   @map("receta_version") @db.VarChar(20)
+  /**
+   * SHA-256 del esquema del plano medido. Sirve para detectar desactualización.
+   */
+  documentoHash     String   @map("documento_hash") @db.VarChar(64)
+  totalMaterialesBs Decimal  @default(0) @map("total_materiales_bs") @db.Decimal(16, 2)
+  /**
+   * Cuántas líneas quedaron sin precio. Se materializa para que el listado no
+   * tenga que cargar las líneas solo para advertir "faltan 3 precios".
+   */
+  lineasPendientes  Int      @default(0) @map("lineas_pendientes")
+  fecha             DateTime @default(now()) @map("fecha_presupuesto") @db.Timestamp(3)
+
+  proyecto Proyecto           @relation(fields: [proyectoId], references: [id], onDelete: Cascade)
+  creador  Usuario            @relation(fields: [creadorId], references: [id], onDelete: Cascade)
+  lineas   PresupuestoLinea[]
+
+  @@index([proyectoId, fecha])
+  @@map("presupuesto")
+}
+
+/**
+ * Renglón del presupuesto.
+ * `precioUnitarioBs` y `subtotalBs` son NULL cuando la línea quedó PENDIENTE:
+ * no había precio del proveedor y el usuario no escribió uno. Se guarda igual
+ * para no perder la cantidad medida, pero queda fuera del total — nunca se
+ * rellena con 0, porque un cero se sumaría como si el material fuera gratis.
+ * `fuente` documenta de dónde salió el número:
+ * `{ proveedor, url, sku, unidadExterna, capturadoEn, tipo: "web" | "manual" }`.
+ */
+model PresupuestoLinea {
+  id               Int      @id @default(autoincrement()) @map("linea_id")
+  presupuestoId    String   @map("presupuesto_id") @db.Uuid
+  orden            Int      @default(0)
+  categoria        String   @map("categoria") @db.VarChar(30)
+  claveMaterial    String   @map("clave_material") @db.VarChar(60)
+  descripcion      String   @map("descripcion") @db.VarChar(200)
+  unidad           String   @map("unidad") @db.VarChar(10)
+  cantidad         Decimal  @map("cantidad") @db.Decimal(14, 3)
+  precioUnitarioBs Decimal? @map("precio_unitario_bs") @db.Decimal(14, 4)
+  subtotalBs       Decimal? @map("subtotal_bs") @db.Decimal(16, 2)
+  pendiente        Boolean  @default(false)
+  /**
+   * `CALCULADO` si lo resolvió el backend; `MANUAL` si lo escribió el usuario.
+   */
+  origen           String   @map("origen") @db.VarChar(20)
+  fuente           Json?    @map("fuente") @db.JsonB
+  nota             String?  @map("nota") @db.VarChar(255)
+
+  presupuesto Presupuesto @relation(fields: [presupuestoId], references: [id], onDelete: Cascade)
+
+  @@index([presupuestoId, orden])
+  @@map("presupuesto_linea")
+}

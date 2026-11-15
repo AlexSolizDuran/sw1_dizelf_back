@@ -33,6 +33,11 @@ import { ProyectosService } from '../service/proyectos.service';
     PresenciaGateway,
     SyncGateway,
   ],
-  exports: [ProyectosService],
+  /**
+   * `MembresiaService` se exporta porque el guard de proyecto lo inyecta en
+   * otros módulos (`presupuestos`). Exportar solo `ProyectosService` deja al
+   * guard sin resolver la membresía al construir el módulo.
+   */
+  exports: [ProyectosService, MembresiaService],
 })
 export class ProyectosModule {}

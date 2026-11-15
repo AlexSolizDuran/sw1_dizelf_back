@@ -11,6 +11,7 @@ model Proyecto {
   versiones     Version[]
   colaboradores Colaborador[]
   documentos    DocumentoColaborativo[]
+  presupuestos  Presupuesto[]
 
   @@index([nombre])
   @@map("proyecto")
