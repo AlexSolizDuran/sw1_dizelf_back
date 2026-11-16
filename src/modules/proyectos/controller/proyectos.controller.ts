@@ -15,6 +15,10 @@ import {
 } from '@nestjs/common';
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import { RequiereCapacidad } from '../../../common/decorators/capacidad-proyecto.decorator';
+import {
+  TICKET_TTL_SEGUNDOS,
+  TokenVerificadorService,
+} from '../../../common/auth/token-verificador.service';
 import { ProyectoRolGuard } from '../../../common/guards/proyecto-rol.guard';
 import type { JwtPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { ActualizarProyectoDto } from '../dto/proyecto/actualizar-proyecto.dto';
@@ -29,7 +33,34 @@ import { ProyectosService } from '../service/proyectos.service';
 
 @Controller('proyectos')
 export class ProyectosController {
-  constructor(private readonly proyectosService: ProyectosService) {}
+  constructor(
+    private readonly proyectosService: ProyectosService,
+    private readonly tokenVerificador: TokenVerificadorService,
+  ) {}
+
+  /**
+   * Emite el ticket con el que el navegador abre el WebSocket de sync.
+   *
+   * El HTTP va por el proxy same-origin del front (`/api/backend/*`), así que la
+   * cookie de sesión quedó en el dominio de Vercel y ya no viaja al handshake
+   * contra Render. El ticket ocupa su lugar: se pide acá —con la cookie, por el
+   * proxy, y con la membresía ya validada por `ProyectoRolGuard`— y el gateway
+   * lo verifica con un secreto derivado de `JWT_SECRET`.
+   *
+   * `leer` y no `editar`: un LECTOR también abre el socket (recibe el estado y
+   * la presencia, solo que no puede emitir).
+   */
+  @Post(':id/sync-ticket')
+  @UseGuards(ProyectoRolGuard)
+  @RequiereCapacidad('leer')
+  @HttpCode(HttpStatus.OK)
+  async crearTicketSync(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('sub') usuarioId: number,
+  ): Promise<{ ticket: string; expiraEnSegundos: number }> {
+    const ticket = await this.tokenVerificador.firmarTicket(usuarioId, id);
+    return { ticket, expiraEnSegundos: TICKET_TTL_SEGUNDOS };
+  }
 
   @Post()
   @HttpCode(HttpStatus.CREATED)

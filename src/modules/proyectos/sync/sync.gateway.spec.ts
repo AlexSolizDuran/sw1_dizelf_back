@@ -1,5 +1,26 @@
+/* eslint-disable @typescript-eslint/unbound-method */
 import * as Y from 'yjs';
+import type { Socket } from 'socket.io';
 import { sembrarDocumento, type EscenaPlana } from './documento-yjs';
+import { SyncGateway } from './sync.gateway';
+
+// `@nestjs/config` publica ESM y Jest corre CJS: el gateway lo importa de forma
+// transitiva vía `TokenVerificadorService`. El gateway de este test recibe un
+// verificador falso, así que basta con que el módulo exista.
+jest.mock('@nestjs/config', () => ({
+  ConfigService: class MockConfigService {},
+}));
+
+jest.mock('@nestjs/jwt', () => ({
+  JwtService: class MockJwtService {
+    signAsync(): Promise<string> {
+      return Promise.resolve('token');
+    }
+    verifyAsync<T>(): Promise<T> {
+      throw new Error('no usado en este test');
+    }
+  },
+}));
 
 /**
  * El CRDT con la granularidad que usa el gateway: un `Y.Map` por nodo.
@@ -166,5 +187,93 @@ describe('Sembrado del documento', () => {
     expect(doc.getMap('scene:materials').toJSON()).toEqual({
       mat_1: { id: 'mat_1', name: 'Hormigón' },
     });
+  });
+});
+
+/**
+ * Autenticación del handshake.
+ *
+ * En producción la cookie de sesión ya no llega al backend (el login pasa por
+ * el proxy same-origin del front), así que el navegador presenta un ticket en
+ * `handshake.auth`. Si el gateway dejara de mirarlo, todo proyecto mostraría
+ * "Sesión no válida" con el usuario logueado.
+ */
+describe('SyncGateway — autenticación del handshake', () => {
+  const crearGateway = (ticketValido: boolean) => {
+    const tokenVerificador = {
+      leerTicket: (auth: unknown) =>
+        typeof auth === 'object' && auth !== null
+          ? (auth as { ticket?: string }).ticket
+          : undefined,
+      verificarTicket: jest.fn(() =>
+        Promise.resolve(ticketValido ? { sub: 7 } : null),
+      ),
+      verificar: jest.fn(() => Promise.resolve(null)),
+    };
+    const membresia = {
+      resolver: jest.fn(() =>
+        Promise.resolve({
+          estado: 'MIEMBRO',
+          rol: 'CREADOR',
+          puedeEditar: true,
+        }),
+      ),
+    };
+    const documento = { leer: jest.fn(() => Promise.resolve(null)) };
+
+    const gateway = new SyncGateway(
+      tokenVerificador as never,
+      membresia as never,
+      documento as never,
+    );
+
+    return { gateway, tokenVerificador, membresia, documento };
+  };
+
+  const crearSocket = () =>
+    ({
+      handshake: {
+        query: { proyectoId: 'p1' },
+        auth: { ticket: 'ticket-de-prueba' },
+        headers: {},
+      },
+      data: {},
+      emit: jest.fn(),
+      disconnect: jest.fn(),
+      join: jest.fn(() => Promise.resolve()),
+    }) as unknown as Socket & { emit: jest.Mock; disconnect: jest.Mock };
+
+  it('entra con ticket válido sin mirar la cookie', async () => {
+    const { gateway, tokenVerificador, membresia } = crearGateway(true);
+    const socket = crearSocket();
+
+    await gateway.handleConnection(socket);
+
+    expect(tokenVerificador.verificarTicket).toHaveBeenCalledWith(
+      'ticket-de-prueba',
+      'p1',
+    );
+    // La cookie es el camino de respaldo, no el principal.
+    expect(tokenVerificador.verificar).not.toHaveBeenCalled();
+    expect(membresia.resolver).toHaveBeenCalledWith('p1', 7);
+    expect(socket.emit).toHaveBeenCalledWith(
+      'sync:inicial',
+      expect.anything(),
+      { reemplazar: false },
+    );
+  });
+
+  it('rechaza el socket cuando el ticket no vale', async () => {
+    const { gateway, membresia } = crearGateway(false);
+    const socket = crearSocket();
+
+    await gateway.handleConnection(socket);
+
+    expect(membresia.resolver).not.toHaveBeenCalled();
+    expect(socket.emit).toHaveBeenCalledWith('sync:error', {
+      codigo: 'SIN_SESION',
+      mensaje: 'Sesión no válida.',
+    });
+    expect(socket.disconnect).toHaveBeenCalledWith(true);
   });
 });

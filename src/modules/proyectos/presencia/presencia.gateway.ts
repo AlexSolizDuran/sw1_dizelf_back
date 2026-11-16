@@ -111,12 +111,20 @@ export class PresenciaGateway
       return;
     }
 
-    const token = await this.tokenVerificador.verificar({
-      // El handshake trae la cookie httpOnly igual que una petición: el
-      // navegador la manda sola porque el socket se abre al mismo origen.
-      cookies: this.leerCookies(socket),
-      headers: socket.handshake.headers,
-    });
+    /*
+     * Ticket primero (en producción la cookie vive en el dominio del front, ver
+     * `TokenVerificadorService.firmarTicket`); cookie/Bearer como respaldo
+     * (desarrollo local y clientes no-navegador).
+     */
+    const ticket = this.tokenVerificador.leerTicket(socket.handshake.auth);
+    const token = ticket
+      ? await this.tokenVerificador.verificarTicket(ticket, proyectoId)
+      : await this.tokenVerificador.verificar({
+          // El handshake trae la cookie httpOnly igual que una petición: el
+          // navegador la manda sola si el socket apunta al mismo origen.
+          cookies: this.leerCookies(socket),
+          headers: socket.handshake.headers,
+        });
 
     if (!token) {
       this.logger.warn(

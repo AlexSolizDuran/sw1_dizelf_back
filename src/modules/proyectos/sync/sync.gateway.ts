@@ -126,10 +126,23 @@ export class SyncGateway
       return;
     }
 
-    const token = await this.tokenVerificador.verificar({
-      cookies: this.leerCookies(socket),
-      headers: socket.handshake.headers,
-    });
+    /*
+     * Dos caminos de autenticación, en este orden:
+     *
+     *  1. TICKET (`handshake.auth`): lo usa el navegador en producción. El HTTP
+     *     va por el proxy same-origin del front, así que la cookie quedó
+     *     host-only del dominio de Vercel y el handshake contra Render no la
+     *     lleva. El ticket se pide a `POST /proyectos/:id/sync-ticket`.
+     *  2. COOKIE / BEARER: desarrollo local y clientes que no son navegador.
+     *     Se conserva como respaldo para no romper la sesión clásica.
+     */
+    const ticket = this.tokenVerificador.leerTicket(socket.handshake.auth);
+    const token = ticket
+      ? await this.tokenVerificador.verificarTicket(ticket, proyectoId)
+      : await this.tokenVerificador.verificar({
+          cookies: this.leerCookies(socket),
+          headers: socket.handshake.headers,
+        });
     if (!token) {
       this.logger.warn(`Sync rechazada: sin sesión válida en ${proyectoId}.`);
       socket.emit('sync:error', {

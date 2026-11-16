@@ -8,6 +8,18 @@ export interface TokenValido {
   username?: string;
 }
 
+/** Alcance del ticket: solo sirve para abrir el socket de sync. */
+export const TICKET_SCOPE = 'sync';
+
+/** Vida del ticket. Corta a propósito: el socket lo renueva en cada reconexión. */
+export const TICKET_TTL_SEGUNDOS = 120;
+
+interface PayloadTicket {
+  sub?: number;
+  proyectoId?: string;
+  scope?: string;
+}
+
 /**
  * Verificación del token, compartida entre HTTP y WebSocket.
  *
@@ -83,5 +95,98 @@ export class TokenVerificadorService {
       this.logger.warn(`Token inválido o expirado: ${mensaje}`);
       return null;
     }
+  }
+
+  /**
+   * Secreto del ticket, DERIVADO de `JWT_SECRET`.
+   *
+   * Sin variable nueva: `SYNC_TICKET_SECRET` sería otra cosa que rotar y otra
+   * cosa que olvidar configurar en Render. Derivarlo con un sufijo da un secreto
+   * distinto del de sesión y con la misma raíz de confianza:
+   *
+   *  - un ticket NO sirve como token de sesión (firma con otro secreto);
+   *  - un token de sesión NO sirve como ticket (idem, y además falta `scope`).
+   *
+   * Rotar `JWT_SECRET` invalida los tickets en vuelo, que duran dos minutos.
+   */
+  private secretoDeTicket(): string {
+    return `${this.configService.get<string>('app.jwtSecret') ?? ''}:sync-ticket`;
+  }
+
+  /**
+   * Emite un ticket de corta duración para abrir el WebSocket de un proyecto.
+   *
+   * Existe porque el HTTP pasó a ir por el proxy same-origin del front (la
+   * cookie quedó host-only del dominio de Vercel), pero Vercel no puede proxear
+   * WebSockets: el socket sigue yendo directo a Render, donde esa cookie ya no
+   * llega. El ticket viaja en `handshake.auth`, que es un campo del payload del
+   * handshake, no una cabecera que el navegador agregue sola.
+   *
+   * Quien lo emite es el backend, no el front: así el secreto nunca sale de
+   * Render y la pertenencia al proyecto se valida del lado del servidor.
+   */
+  async firmarTicket(usuarioId: number, proyectoId: string): Promise<string> {
+    return this.jwtService.signAsync(
+      { sub: usuarioId, proyectoId, scope: TICKET_SCOPE },
+      {
+        secret: this.secretoDeTicket(),
+        expiresIn: TICKET_TTL_SEGUNDOS,
+      },
+    );
+  }
+
+  /**
+   * Verifica el ticket de un handshake.
+   *
+   * Devuelve `null` —y no lanza— igual que `verificar`: el gateway solo necesita
+   * saber si deja entrar. Se comprueban las tres cosas que un ticket de sesión
+   * normal no garantiza: firma derivada, alcance `sync` y que el proyecto del
+   * ticket sea el del `query` del socket (si no, un ticket de un proyecto propio
+   * abriría cualquier otro).
+   */
+  async verificarTicket(
+    ticket: string | undefined,
+    proyectoId: string,
+  ): Promise<TokenValido | null> {
+    if (!ticket) return null;
+
+    try {
+      const payload = await this.jwtService.verifyAsync<PayloadTicket>(ticket, {
+        secret: this.secretoDeTicket(),
+      });
+
+      if (payload.scope !== TICKET_SCOPE) {
+        this.logger.warn('Ticket de sync con alcance inválido.');
+        return null;
+      }
+      if (payload.proyectoId !== proyectoId) {
+        this.logger.warn(
+          `Ticket de sync para otro proyecto (${payload.proyectoId ?? 'sin id'}).`,
+        );
+        return null;
+      }
+      if (typeof payload.sub !== 'number') {
+        this.logger.warn('Ticket de sync sin usuario.');
+        return null;
+      }
+
+      return { sub: payload.sub };
+    } catch (error: unknown) {
+      const mensaje = error instanceof Error ? error.message : 'desconocido';
+      this.logger.warn(`Ticket de sync inválido o expirado: ${mensaje}`);
+      return null;
+    }
+  }
+
+  /**
+   * Lee el ticket de `handshake.auth`, que socket.io deja como objeto plano.
+   *
+   * Se valida el tipo porque `auth` lo controla el cliente: podría mandar un
+   * objeto, un array o nada.
+   */
+  leerTicket(auth: unknown): string | undefined {
+    if (!auth || typeof auth !== 'object') return undefined;
+    const ticket = (auth as Record<string, unknown>).ticket;
+    return typeof ticket === 'string' && ticket.length > 0 ? ticket : undefined;
   }
 }
