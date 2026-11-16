@@ -21,6 +21,6 @@ export const envValidationSchema = Joi.object({
       'JWT_SECRET debe tener al menos 16 caracteres para garantizar seguridad.',
   }),
   JWT_EXPIRACION: Joi.string().default('1d'),
-  FRONTEND_URL: Joi.string().default('http://localhost:5173'),
+  FRONTEND_URL: Joi.string().default('http://localhost:3000'),
   COOKIE_SECURE: Joi.boolean().truthy('true').falsy('false').default(false),
 });

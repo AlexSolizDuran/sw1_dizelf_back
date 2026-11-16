@@ -1,11 +1,12 @@
-import type { RolProyecto } from '../../enums/rol-proyecto.enum';
-
 export class ProyectoListaDto {
   id: string;
   nombre: string;
   creadorId: number;
-  miRol: RolProyecto;
+  /** CREADOR si es el dueño; si no, el nombre del permiso en la base. */
+  miRol: string;
   totalColaboradores: number;
+  /** Derivado de `miRol`: si puede abrir el plano en modo edición. */
+  puedeEditar: boolean;
 }
 
 export class ProyectosPaginadosDto {
