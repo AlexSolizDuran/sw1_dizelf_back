@@ -1,0 +1,63 @@
+# ============================================================================
+# render.yaml — Blueprint del backend (NestJS + Prisma + Neon)
+# ----------------------------------------------------------------------------
+# Sirve para crear el servicio desde Render → New → Blueprint, o para que
+# Render sincronice la config de un servicio existente.
+#
+# IMPORTANTE: `name` tiene que ser EXACTAMENTE el nombre del servicio que ya
+# tenés en Render. Si no coincide, Render crea un servicio NUEVO en vez de
+# actualizar el existente.
+#
+# Los secretos NO van acá: se marcan con `sync: false` y Render los pide en el
+# dashboard al crear/sincronizar. Cargalos desde `.env.prod` (uso local).
+# ============================================================================
+
+services:
+  - type: web
+    name: dizelf-back # <-- cambiá por el nombre real de tu servicio en Render
+    runtime: node
+    # Si tu servicio ya es pago, borrá esta línea para no degradarlo a free.
+    # En free el servicio se duerme tras ~15 min sin tráfico y los WebSockets
+    # de colaboración se cortan hasta que alguien entra de nuevo.
+    plan: free
+    branch: main
+    autoDeployTrigger: commit
+
+    # `--include=dev` es obligatorio: Render define NODE_ENV=production y npm
+    # omite devDependencies, con lo que `nest` (de @nestjs/cli) no existe y el
+    # build falla con "sh: 1: nest: not found".
+    #
+    # `prisma migrate deploy` va acá porque `preDeployCommand` solo está
+    # disponible en planes pagos.
+    buildCommand: npm ci --include=dev && npx prisma migrate deploy && npm run build
+
+    # No uses `npm start` (ejecuta `nest start`, que es devDependency).
+    startCommand: npm run start:prod
+
+    # GET / está marcado @Public() y responde "Hello World!".
+    healthCheckPath: /
+
+    # Seed idempotente (EDITOR/LECTOR). Corre una sola vez, tras el primer
+    # deploy exitoso.
+    initialDeployHook: npx prisma db seed
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: JWT_EXPIRACION
+        value: 1d
+
+      # Secretos: se completan en el dashboard (Environment → Environment
+      # Variables). Valores en dizelf_back/.env.prod.
+      - key: JWT_SECRET
+        sync: false
+      - key: NEON_DB_URL # host con -pooler (runtime)
+        sync: false
+      - key: NEON_DIRECT_URL # host directo (migraciones)
+        sync: false
+      - key: FRONTEND_URL # https://tu-front.vercel.app, sin '/' final
+        sync: false
+
+      # PORT lo inyecta Render; no lo declares.
