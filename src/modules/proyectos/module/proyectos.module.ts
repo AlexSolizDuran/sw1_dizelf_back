@@ -3,12 +3,14 @@ import { TokenVerificadorService } from '../../../common/auth/token-verificador.
 import { ProyectoRolGuard } from '../../../common/guards/proyecto-rol.guard';
 import { AuthModule } from '../../auth/auth.module';
 import { ColaboradoresController } from '../controller/colaboradores.controller';
+import { ModeloArController } from '../controller/modelo-ar.controller';
 import { ProyectosController } from '../controller/proyectos.controller';
 import { PresenciaGateway } from '../presencia/presencia.gateway';
 import { SyncGateway } from '../sync/sync.gateway';
 import { ColaboradoresService } from '../service/colaboradores.service';
 import { DocumentoService } from '../service/documento.service';
 import { MembresiaService } from '../service/membresia.service';
+import { ModeloArService } from '../service/modelo-ar.service';
 import { ProyectosService } from '../service/proyectos.service';
 
 @Module({
@@ -22,11 +24,16 @@ import { ProyectosService } from '../service/proyectos.service';
    * No hay ciclo: `AuthModule` importa `UsuariosModule`, no este.
    */
   imports: [AuthModule],
-  controllers: [ProyectosController, ColaboradoresController],
+  controllers: [
+    ProyectosController,
+    ColaboradoresController,
+    ModeloArController,
+  ],
   providers: [
     ProyectosService,
     ColaboradoresService,
     MembresiaService,
+    ModeloArService,
     DocumentoService,
     ProyectoRolGuard,
     TokenVerificadorService,

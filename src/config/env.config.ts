@@ -9,6 +9,8 @@ export interface AppConfig {
   databaseUrl: string;
   jwtSecret: string;
   jwtExpiresIn: string;
+  /** Vigencia del token de la app (segundos). 30 días por defecto. */
+  jwtExpiracionMovilSegundos: number;
   frontendUrl: string;
   frontendUrls: string[];
   cookieSecure: boolean;
@@ -38,6 +40,11 @@ export default registerAs('app', (): AppConfig => {
     databaseUrl: process.env.NEON_DB_URL || '',
     jwtSecret: process.env.JWT_SECRET || '',
     jwtExpiresIn: process.env.JWT_EXPIRACION || '1d',
+    // 30 días: una app instalada no debe pedir la contraseña cada día.
+    jwtExpiracionMovilSegundos: parseInt(
+      process.env.JWT_EXPIRACION_MOVIL_SEGUNDOS || '2592000',
+      10,
+    ),
     frontendUrl: frontendUrls[0] || 'http://localhost:3000',
     frontendUrls,
     cookieSecure: process.env.COOKIE_SECURE === 'true',

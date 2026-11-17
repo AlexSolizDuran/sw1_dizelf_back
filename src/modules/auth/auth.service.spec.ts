@@ -54,6 +54,7 @@ describe('AuthService', () => {
       get: jest.fn().mockImplementation((key: string) => {
         if (key === 'app.nodeEnv') return 'test';
         if (key === 'app.jwtSecret') return 'test_secret_1234567890';
+        if (key === 'app.jwtExpiracionMovilSegundos') return 2592000;
         return null;
       }),
     };
@@ -113,6 +114,77 @@ describe('AuthService', () => {
         expect.any(Object),
       );
       expect(result.usuario.username).toBe('carlosg');
+    });
+  });
+
+  describe('tokenMovil', () => {
+    const fakeUser = {
+      id: 7,
+      username: 'ana',
+      hashContrasena: 'hashed_password',
+      personaId: 9,
+      persona: {
+        id: 9,
+        nombre: 'Ana',
+        apellido: 'Perez',
+        gmail: 'ana@example.com',
+      },
+      proyectosCreados: [],
+      colaboraciones: [],
+    };
+
+    it('devuelve el token en el cuerpo, sin cookie', async () => {
+      usuariosService.buscarPorUsernameParaAutenticacion.mockResolvedValue(
+        fakeUser,
+      );
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+      jwtService.signAsync.mockResolvedValue('token_movil');
+
+      const resultado = await service.tokenMovil({
+        identificador: 'ana',
+        password: 'Password123!',
+      });
+
+      expect(resultado.token).toBe('token_movil');
+      expect(resultado.expiraEnSegundos).toBe(2592000);
+      expect(resultado.usuario).toEqual({
+        id: 7,
+        username: 'ana',
+        persona: fakeUser.persona,
+      });
+      // Lo importante: un cliente nativo no depende de la cookie.
+      expect(mockResponse.cookie).not.toHaveBeenCalled();
+    });
+
+    it('firma con la vigencia móvil, no con la del web', async () => {
+      usuariosService.buscarPorGmailParaAutenticacion.mockResolvedValue(
+        fakeUser,
+      );
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+      jwtService.signAsync.mockResolvedValue('token_movil');
+
+      await service.tokenMovil({
+        identificador: 'ana@example.com',
+        password: 'Password123!',
+      });
+
+      expect(jwtService.signAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ sub: 7, username: 'ana' }),
+        { expiresIn: 2592000 },
+      );
+    });
+
+    it('rechaza credenciales inválidas sin emitir token', async () => {
+      usuariosService.buscarPorUsernameParaAutenticacion.mockResolvedValue(
+        fakeUser,
+      );
+      (bcrypt.compare as jest.Mock).mockResolvedValue(false);
+
+      await expect(
+        service.tokenMovil({ identificador: 'ana', password: 'mala' }),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+
+      expect(jwtService.signAsync).not.toHaveBeenCalled();
     });
   });
 

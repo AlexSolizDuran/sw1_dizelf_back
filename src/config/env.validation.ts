@@ -21,6 +21,15 @@ export const envValidationSchema = Joi.object({
       'JWT_SECRET debe tener al menos 16 caracteres para garantizar seguridad.',
   }),
   JWT_EXPIRACION: Joi.string().default('1d'),
+  // Vigencia del token de la app móvil, en segundos (30 días por defecto).
+  JWT_EXPIRACION_MOVIL_SEGUNDOS: Joi.number().min(60).default(2592000),
   FRONTEND_URL: Joi.string().default('http://localhost:3000'),
   COOKIE_SECURE: Joi.boolean().truthy('true').falsy('false').default(false),
+  // Object Storage (GLB de AR). Opcionales: sin ellas la API arranca y solo los
+  // endpoints de modelo responden 503 (ver StorageConfig).
+  MODELOS_BUCKET: Joi.string().default('modelos-ar'),
+  AWS_ENDPOINT_URL_S3: Joi.string().allow('').optional(),
+  AWS_REGION: Joi.string().default('us-east-2'),
+  AWS_ACCESS_KEY_ID: Joi.string().allow('').optional(),
+  AWS_SECRET_ACCESS_KEY: Joi.string().allow('').optional(),
 });

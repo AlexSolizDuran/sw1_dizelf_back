@@ -24,9 +24,13 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "./e2e/run.sh",
     "test:e2e:ui": "E2E_PORT=3098 ./e2e/run.sh",
-    "test:navegador": "node e2e/navegador.e2e.js"
+    "test:navegador": "node e2e/navegador.e2e.js",
+    "storage:setup": "node --env-file=.env scripts/config-bucket.mjs",
+    "storage:preparar": "node --env-file=.env scripts/preparar-storage-neon.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1170.0",
+    "@aws-sdk/s3-request-presigner": "^3.1170.0",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^12.0.1",
     "@nestjs/core": "^11.0.1",

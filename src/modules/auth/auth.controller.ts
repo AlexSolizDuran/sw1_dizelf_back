@@ -16,6 +16,7 @@ import { AuthService } from './auth.service';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { TokenMovilDto } from './dto/token-movil.dto';
 import type { JwtPayload } from './interfaces/jwt-payload.interface';
 
 /**
@@ -57,6 +58,20 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<AuthResponseDto> {
     return this.authService.login(dto, res);
+  }
+
+  /**
+   * Token para clientes nativos (app de AR).
+   *
+   * Mismas credenciales que `/auth/login`, pero el JWT viaja en el cuerpo y no
+   * se setea cookie: RN no puede leer una httpOnly, y meter el token en la URL
+   * del WebView lo dejaría en logs y en el historial.
+   */
+  @Public()
+  @Post('token')
+  @HttpCode(HttpStatus.OK)
+  async tokenMovil(@Body() dto: LoginDto): Promise<TokenMovilDto> {
+    return this.authService.tokenMovil(dto);
   }
 
   /**

@@ -57,6 +57,49 @@ $ npm run test:e2e
 $ npm run test:cov
 ```
 
+## Modelos AR (Object Storage)
+
+El GLB que consume la app de realidad aumentada se guarda en **Neon Object
+Storage** (S3 compatible); Postgres solo guarda la clave y la versión en la
+tabla `modelo_ar`. El binario no pasa por este servidor: la API firma una URL y
+el navegador sube o descarga directo contra el bucket.
+
+```bash
+# 1. Agregar NEON_API_KEY a .env (Neon Console → perfil → Settings → API keys).
+#    Solo lo usa este script; la app no lo necesita.
+
+# 2. Un solo comando: resuelve proyecto/rama, crea el bucket, mintea la
+#    credencial S3, escribe las variables en .env y aplica CORS.
+$ npm run storage:preparar -- <project_id> <branch_id>
+
+# Si la cuenta tiene varias organizaciones, agregar NEON_ORG_ID=<id> a .env.
+# El script nunca imprime secretos.
+
+# 3. Migración
+$ npx prisma migrate deploy
+```
+
+Para habilitar el dominio del front en producción (el shell gana sobre `.env`):
+
+```bash
+$ FRONTEND_URL=https://tu-front.vercel.app npm run storage:preparar -- <project_id> <branch_id>
+```
+
+Ruta manual (si no querés API key): `neon auth`, `neon link`, `neon buckets
+create modelos-ar`, `neon env pull`, `npm run storage:setup`.
+
+Endpoints (todos requieren sesión y membresía en el proyecto):
+
+| Método | Ruta | Permiso |
+|---|---|---|
+| `POST` | `/proyectos/:id/modelo/url` | `editar` |
+| `POST` | `/proyectos/:id/modelo` | `editar` |
+| `GET` | `/proyectos/:id/modelo` | `leer` (302 al bucket) |
+| `GET` | `/proyectos/:id/modelo/meta` | `leer` |
+
+Sin `AWS_ENDPOINT_URL_S3` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` la API
+arranca igual y solo estos endpoints responden 503.
+
 ## Deployment
 
 When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.

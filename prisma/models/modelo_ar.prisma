@@ -1,0 +1,27 @@
+/// Metadatos del GLB que la app de realidad aumentada descarga del proyecto.
+///
+/// Los bytes NO viven en Postgres: viven en Neon Object Storage (bucket
+/// `modelos-ar`) y acá queda solo la clave del objeto y su versión. Un GLB de
+/// 10 MB en una columna `Bytes` haría que cada SELECT del proyecto lo traiga y
+/// que el backup de la base crezca sin control.
+///
+/// Hay una fila por proyecto (la PK es `proyecto_id`): "un solo GLB vigente por
+/// proyecto". Al publicar de nuevo se sube un objeto nuevo y se borra el
+/// anterior, así que la versión anterior no se conserva acá.
+model ModeloAr {
+  proyectoId String   @id @map("proyecto_id") @db.Uuid
+  proyecto   Proyecto @relation(fields: [proyectoId], references: [id], onDelete: Cascade)
+
+  /// Ruta del objeto dentro del bucket: `modelos/<proyectoId>/<uuid>.glb`.
+  clave   String @map("clave") @db.VarChar(200)
+  /// Se incrementa en cada publicación confirmada. El móvil la usa como ETag lógico.
+  version Int    @default(0) @map("version")
+  /// Tamaño real del objeto, medido con HeadObject al confirmar (no lo dice el cliente).
+  bytes   Int    @map("bytes")
+  mime    String @default("model/gltf-binary") @map("mime") @db.VarChar(50)
+
+  creadoEn    DateTime @default(now()) @map("creado_en") @db.Timestamp(3)
+  actualizado DateTime @updatedAt @map("actualizado") @db.Timestamp(3)
+
+  @@map("modelo_ar")
+}

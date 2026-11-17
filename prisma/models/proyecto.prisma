@@ -12,6 +12,8 @@ model Proyecto {
   colaboradores Colaborador[]
   documentos    DocumentoColaborativo[]
   presupuestos  Presupuesto[]
+  // 1:1 con los metadatos del GLB que consume la app de AR.
+  modeloAr ModeloAr?
 
   @@index([nombre])
   @@map("proyecto")

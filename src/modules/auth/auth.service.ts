@@ -7,6 +7,7 @@ import { UsuariosService } from '../usuarios/usuarios.service';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { TokenMovilDto } from './dto/token-movil.dto';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
 
 /**
@@ -73,6 +74,68 @@ export class AuthService {
    * @param res Objeto Response para adjuntar la cookie de sesión.
    */
   async login(dto: LoginDto, res: Response): Promise<AuthResponseDto> {
+    const usuario = await this.validarCredenciales(dto);
+
+    // Emisión y almacenamiento de la sesión
+    const token = await this.generarToken(
+      usuario.id,
+      usuario.username,
+      usuario.persona.gmail,
+    );
+    this.establecerCookieAuth(res, token);
+
+    this.logger.log(
+      `Inicio de sesión exitoso para usuario: ${usuario.username} (ID: ${usuario.id})`,
+    );
+
+    return {
+      message: 'Inicio de sesión exitoso.',
+      usuario: this.perfilDe(usuario),
+    };
+  }
+
+  /**
+   * Emite un JWT en el CUERPO para la app móvil.
+   *
+   * POR QUÉ EXISTE
+   * -------------
+   * Un cliente nativo no puede leer la cookie httpOnly `tokenAcceso` con la que
+   * viaja el token del web, así que no tiene forma de armar un `Bearer`. Este
+   * endpoint valida las mismas credenciales y devuelve el token en el cuerpo,
+   * sin setear cookie: el WebView y el navegador siguen usando `/auth/login`.
+   *
+   * La vigencia es aparte (`JWT_EXPIRACION_MOVIL_SEGUNDOS`, 30 días por
+   * defecto) porque una app instalada no va a pedir la contraseña cada día.
+   */
+  async tokenMovil(dto: LoginDto): Promise<TokenMovilDto> {
+    const usuario = await this.validarCredenciales(dto);
+    const expiraEnSegundos = this.expiracionMovil();
+
+    const token = await this.generarToken(
+      usuario.id,
+      usuario.username,
+      usuario.persona.gmail,
+      expiraEnSegundos,
+    );
+
+    this.logger.log(
+      `Token móvil emitido para usuario: ${usuario.username} (ID: ${usuario.id}).`,
+    );
+
+    return {
+      token,
+      expiraEnSegundos,
+      usuario: this.perfilDe(usuario),
+    };
+  }
+
+  /**
+   * Valida credenciales y devuelve el usuario con su persona.
+   *
+   * Compartido por `/auth/login` (cookie) y `/auth/token` (app): la lógica de
+   * enumeración y temporización vive en un solo lugar.
+   */
+  private async validarCredenciales(dto: LoginDto) {
     const identificador = dto.identificador.toLowerCase().trim();
     const esEmail = identificador.includes('@');
 
@@ -109,31 +172,45 @@ export class AuthService {
       throw new UnauthorizedException('Credenciales inválidas.');
     }
 
-    // Emisión y almacenamiento de la sesión
-    const token = await this.generarToken(
-      usuario.id,
-      usuario.username,
-      usuario.persona.gmail,
-    );
-    this.establecerCookieAuth(res, token);
+    return usuario;
+  }
 
-    this.logger.log(
-      `Inicio de sesión exitoso para usuario: ${usuario.username} (ID: ${usuario.id})`,
-    );
-
+  /** Datos públicos del perfil, sin contraseña ni hash. */
+  private perfilDe(usuario: {
+    id: number;
+    username: string;
+    persona: {
+      id: number;
+      nombre: string;
+      apellido: string;
+      gmail: string;
+    };
+  }): AuthResponseDto['usuario'] {
     return {
-      message: 'Inicio de sesión exitoso.',
-      usuario: {
-        id: usuario.id,
-        username: usuario.username,
-        persona: {
-          id: usuario.persona.id,
-          nombre: usuario.persona.nombre,
-          apellido: usuario.persona.apellido,
-          gmail: usuario.persona.gmail,
-        },
+      id: usuario.id,
+      username: usuario.username,
+      persona: {
+        id: usuario.persona.id,
+        nombre: usuario.persona.nombre,
+        apellido: usuario.persona.apellido,
+        gmail: usuario.persona.gmail,
       },
     };
+  }
+
+  /**
+   * Segundos de vigencia del token móvil.
+   *
+   * Se expresa en segundos (no en `30d`) porque es lo que espera `signAsync` y
+   * lo que la app necesita para programar su re-login sin parsear duraciones.
+   */
+  private expiracionMovil(): number {
+    const configurado = Number(
+      this.configService.get<number | string>('app.jwtExpiracionMovilSegundos'),
+    );
+    return Number.isFinite(configurado) && configurado > 0
+      ? configurado
+      : 30 * 24 * 60 * 60;
   }
 
   /**
@@ -155,6 +232,7 @@ export class AuthService {
     userId: number,
     username: string,
     gmail: string,
+    expiraEnSegundos?: number,
   ): Promise<string> {
     const payload: JwtPayload = {
       sub: userId,
@@ -162,7 +240,10 @@ export class AuthService {
       gmail,
     };
 
-    return this.jwtService.signAsync(payload);
+    // Sin `expiraEnSegundos` se usa la vigencia del `JwtModule` (la del web).
+    return expiraEnSegundos
+      ? this.jwtService.signAsync(payload, { expiresIn: expiraEnSegundos })
+      : this.jwtService.signAsync(payload);
   }
 
   /**

@@ -6,8 +6,10 @@ import { AppService } from './app.service';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { CsrfOriginGuard } from './common/guards/csrf-origin.guard';
 import { PrismaModule } from './common/prisma/prisma.module';
+import { StorageModule } from './common/storage/storage.module';
 import appConfig from './config/env.config';
 import { envValidationSchema } from './config/env.validation';
+import storageConfig from './config/storage.config';
 import { AuthModule } from './modules/auth/auth.module';
 import { ProyectosModule } from './modules/proyectos/module/proyectos.module';
 import { PresupuestosModule } from './modules/presupuestos/module/presupuestos.module';
@@ -17,10 +19,11 @@ import { UsuariosModule } from './modules/usuarios/usuarios.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [appConfig],
+      load: [appConfig, storageConfig],
       validationSchema: envValidationSchema,
     }),
     PrismaModule,
+    StorageModule,
     UsuariosModule,
     AuthModule,
     ProyectosModule,
