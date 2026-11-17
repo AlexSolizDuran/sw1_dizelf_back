@@ -12,6 +12,7 @@ model Usuario {
   colaboraciones      Colaborador[]
   documentosEditados  DocumentoColaborativo[]
   presupuestosCreados Presupuesto[]
+  consumosIA          ConsumoIA[]
 
   @@map("usuario")
 }

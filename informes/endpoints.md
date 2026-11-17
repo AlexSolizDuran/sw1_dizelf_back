@@ -290,3 +290,65 @@ Sin body.
 **Errores:** `400` UUID/`usuarioId` inválidos, `401` sin sesión,
 `403` no es creador, `404` proyecto inexistente o el usuario
 no es colaborador del proyecto.
+
+## Consumo de IA (`/ia/consumo`)
+
+Registro acumulado de tokens de los chats de IA. Una fila por usuario, día,
+origen, proveedor y modelo; las llamadas se suman con un UPSERT diario.
+El `dia` se calcula en el servidor con zona horaria `America/La_Paz` y nunca
+lo envía el cliente. `tokensTotal` no se guarda: se calcula como entrada + salida.
+
+### POST /ia/consumo (Autenticado)
+
+Lo llama el servidor de Next después de responder al usuario. El `usuarioId`
+sale del JWT; no se acepta en el body.
+
+**Body `RegistrarConsumoDto`:**
+
+| Campo | Tipo | Reglas |
+|---|---|---|
+| `origen` | string | `escena` o `ayuda` |
+| `proveedor` | string | `hf-space`, `openrouter` o `huggingface` |
+| `modelo` | string | 1 a 120 caracteres |
+| `tokensEntrada` | entero | 0 a 2.000.000 |
+| `tokensSalida` | entero | 0 a 2.000.000 |
+
+```json
+{
+  "origen": "escena",
+  "proveedor": "openrouter",
+  "modelo": "google/gemma-4-31b-it:free",
+  "tokensEntrada": 5840,
+  "tokensSalida": 460
+}
+```
+
+**Retorna `201`:**
+
+```json
+{ "registrado": true, "dia": "2026-11-17" }
+```
+
+**Errores:** `400` validación (incluye campos no declarados), `401` sin sesión.
+
+### GET /ia/consumo/resumen (Autenticado)
+
+Resumen del **propio usuario**. No existe endpoint de administración.
+Sin fechas: desde el primer día del mes hasta hoy, ambos en hora de Bolivia.
+
+**Query:** `desde` y `hasta` opcionales, formato `YYYY-MM-DD`.
+
+**Retorna `200` `ResumenConsumoDto`:**
+
+```json
+{
+  "desde": "2026-11-01",
+  "hasta": "2026-11-17",
+  "total": { "llamadas": 3, "tokensEntrada": 1000, "tokensSalida": 400, "tokensTotal": 1400 },
+  "porProveedor": [{ "proveedor": "openrouter", "llamadas": 3, "tokensEntrada": 1000, "tokensSalida": 400, "tokensTotal": 1400 }],
+  "porModelo": [{ "proveedor": "openrouter", "modelo": "google/gemma-4-31b-it:free", "llamadas": 3, "tokensEntrada": 1000, "tokensSalida": 400, "tokensTotal": 1400 }],
+  "porOrigen": [{ "origen": "escena", "llamadas": 3, "tokensEntrada": 1000, "tokensSalida": 400, "tokensTotal": 1400 }]
+}
+```
+
+**Errores:** `400` fecha inválida o rango invertido, `401` sin sesión.

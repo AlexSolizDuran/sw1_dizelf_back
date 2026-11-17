@@ -1,0 +1,36 @@
+/**
+ * Consumo diario de tokens de IA.
+ *
+ * Una fila por usuario, día, chat, proveedor y modelo. Las llamadas del agente
+ * se acumulan con un UPSERT: el mismo turno puede hacer varias rondas y todas
+ * caen en la misma fila del día.
+ *
+ * `tokensEntrada` es el `prompt_tokens` que informa el proveedor e incluye el
+ * system prompt, el historial, las tools y el mensaje del usuario. Si el
+ * proveedor no informa `usage`, el front estima y el total queda aproximado;
+ * no se guarda un flag porque el objetivo es el conteo agregado, no auditar
+ * llamada por llamada.
+ *
+ * `tokensTotal` no se materializa: se calcula como entrada + salida al
+ * consultar, así no puede quedar desincronizado.
+ */
+model ConsumoIA {
+  id            Int      @id @default(autoincrement()) @map("consumo_id")
+  usuarioId     Int      @map("usuario_id")
+  dia           DateTime @db.Date
+  origen        String   @db.VarChar(20)
+  proveedor     String   @db.VarChar(20)
+  modelo        String   @db.VarChar(120)
+  llamadas      Int      @default(0)
+  tokensEntrada Int      @map("tokens_entrada")
+  tokensSalida  Int      @map("tokens_salida")
+  actualizadoEn DateTime @updatedAt @map("actualizado_en") @db.Timestamp(3)
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  /// Clave del acumulado diario. No es la PK, pero es la que usa el UPSERT.
+  @@unique([usuarioId, dia, origen, proveedor, modelo])
+  /// Consultas globales por día. El unique ya cubre usuario + día.
+  @@index([dia])
+  @@map("consumo_ia")
+}

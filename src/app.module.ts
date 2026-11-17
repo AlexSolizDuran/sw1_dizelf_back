@@ -11,6 +11,7 @@ import appConfig from './config/env.config';
 import { envValidationSchema } from './config/env.validation';
 import storageConfig from './config/storage.config';
 import { AuthModule } from './modules/auth/auth.module';
+import { ConsumoIaModule } from './modules/consumo-ia/module/consumo-ia.module';
 import { ProyectosModule } from './modules/proyectos/module/proyectos.module';
 import { PresupuestosModule } from './modules/presupuestos/module/presupuestos.module';
 import { UsuariosModule } from './modules/usuarios/usuarios.module';
@@ -28,6 +29,7 @@ import { UsuariosModule } from './modules/usuarios/usuarios.module';
     AuthModule,
     ProyectosModule,
     PresupuestosModule,
+    ConsumoIaModule,
   ],
   controllers: [AppController],
   providers: [
