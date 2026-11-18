@@ -10,6 +10,7 @@ import {
 } from '@nestjs/websockets';
 import type { Server, Socket } from 'socket.io';
 import { TokenVerificadorService } from '../../../common/auth/token-verificador.service';
+import { permitirOrigenSocket } from '../../../common/http/origenes';
 import { MembresiaService } from '../service/membresia.service';
 
 /**
@@ -78,7 +79,9 @@ const datos = (socket: { data: unknown }): DatosSocket =>
  */
 @WebSocketGateway({
   namespace: '/presencia',
-  cors: { origin: true, credentials: true },
+  // Misma lista que el CORS HTTP (FRONTEND_URL): antes cualquier origen podía
+  // abrir el socket y leer la lista de presentes.
+  cors: { origin: permitirOrigenSocket, credentials: true },
 })
 export class PresenciaGateway
   implements OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy

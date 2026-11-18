@@ -13,6 +13,7 @@ model Usuario {
   documentosEditados  DocumentoColaborativo[]
   presupuestosCreados Presupuesto[]
   consumosIA          ConsumoIA[]
+  dispositivosPush    DispositivoPush[]
 
   @@map("usuario")
 }

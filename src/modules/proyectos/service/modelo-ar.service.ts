@@ -12,6 +12,7 @@ import {
   type AlmacenDeObjetos,
 } from '../../../common/storage/almacen-objetos.token';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { NotificacionesService } from '../../notificaciones/service/notificaciones.service';
 import { ConfirmarModeloDto } from '../dto/modelo-ar/confirmar-modelo.dto';
 import { MetaModeloDto } from '../dto/modelo-ar/meta-modelo.dto';
 import { UrlModeloDto } from '../dto/modelo-ar/url-modelo.dto';
@@ -51,6 +52,7 @@ export class ModeloArService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(ALMACEN_OBJETOS) private readonly almacen: AlmacenDeObjetos,
+    private readonly notificaciones: NotificacionesService,
   ) {}
 
   /** Firma la subida a una clave nueva del proyecto. */
@@ -76,6 +78,7 @@ export class ModeloArService {
    */
   async confirmar(
     proyectoId: string,
+    actorId: number,
     dto: ConfirmarModeloDto,
   ): Promise<MetaModeloDto> {
     if (!dto.clave.startsWith(`modelos/${proyectoId}/`)) {
@@ -149,6 +152,23 @@ export class ModeloArService {
     this.logger.log(
       `GLB publicado para proyecto ${proyectoId}: v${modelo.version}, ${aMegabytes(modelo.bytes)} MB.`,
     );
+
+    // Best-effort y sin `await`: la publicación ya está guardada y el aviso no
+    // debe sumarle a la respuesta la latencia de Expo ni una consulta más.
+    // `avisarModeloPublicado` atrapa sus propios errores; el `catch` cubre una
+    // falla inesperada para que nunca quede un rechazo sin manejar.
+    void this.notificaciones
+      .avisarModeloPublicado({
+        proyectoId,
+        actorId,
+        version: modelo.version,
+        tipo: anterior ? 'actualizado' : 'creado',
+      })
+      .catch((error: unknown) => {
+        this.logger.warn(
+          `No se pudo avisar la publicación de ${proyectoId}: ${(error as Error).message}`,
+        );
+      });
 
     return {
       hay: true,

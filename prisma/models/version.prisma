@@ -10,6 +10,9 @@ model Version {
   proyectoId String   @map("proyecto_id") @db.Uuid
   proyecto   Proyecto @relation(fields: [proyectoId], references: [id], onDelete: Cascade)
 
-  @@index([fecha])
+  // Las versiones SIEMPRE se consultan por proyecto y se ordenan por fecha.
+  // El índice suelto de `fecha` no servía para ese patrón; este compuesto
+  // cubre el WHERE y el ORDER BY en la misma estructura.
+  @@index([proyectoId, fecha])
   @@map("version")
 }

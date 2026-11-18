@@ -16,5 +16,7 @@ model Proyecto {
   modeloAr ModeloAr?
 
   @@index([nombre])
+  // "Mis proyectos" filtra por creador; sin índice recorre la tabla entera.
+  @@index([creadorId])
   @@map("proyecto")
 }

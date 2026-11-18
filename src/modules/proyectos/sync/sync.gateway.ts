@@ -12,6 +12,7 @@ import * as Y from 'yjs';
 import type { Server, Socket } from 'socket.io';
 import { sembrarDocumento, type EscenaPlana } from './documento-yjs';
 import { TokenVerificadorService } from '../../../common/auth/token-verificador.service';
+import { permitirOrigenSocket } from '../../../common/http/origenes';
 import { MembresiaService } from '../service/membresia.service';
 import { DocumentoService } from '../service/documento.service';
 
@@ -75,7 +76,10 @@ const estadoDe = (socket: Socket): EstadoSocket | undefined =>
  */
 @WebSocketGateway({
   namespace: '/sync',
-  cors: { origin: true, credentials: true },
+  // Misma lista que el CORS HTTP (FRONTEND_URL). `origin: true` refletaba
+  // cualquier origen: un sitio ajeno podía abrir el socket con la cookie del
+  // usuario. Los clientes nativos no mandan Origin y el helper los deja pasar.
+  cors: { origin: permitirOrigenSocket, credentials: true },
 })
 export class SyncGateway
   implements OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy
@@ -386,13 +390,44 @@ export class SyncGateway
     );
   }
 
-  onModuleDestroy(): void {
+  /**
+   * Persiste lo que quedó en memoria antes de que el proceso muera.
+   *
+   * Antes era `void guardarMaterializado(...)`: con SIGTERM (deploy, reinicio,
+   * scale-down) el proceso podía cerrarse antes de que el último autosave
+   * llegara a la base. Ahora se cancelan los debounces y se esperan todos los
+   * guardados, sin que el fallo de uno impida guardar el resto.
+   */
+  async onModuleDestroy(): Promise<void> {
+    const pendientes: Promise<void>[] = [];
+
     for (const [proyectoId, sesion] of this.sesiones) {
-      if (sesion.timer) clearTimeout(sesion.timer);
-      void this.documento.guardarMaterializado(proyectoId, sesion.doc);
+      if (sesion.timer) {
+        clearTimeout(sesion.timer);
+        sesion.timer = null;
+      }
+      pendientes.push(
+        this.documento.guardarMaterializado(proyectoId, sesion.doc),
+      );
     }
+
     this.sesiones.clear();
     this.creando.clear();
+
+    const resultados = await Promise.allSettled(pendientes);
+    const fallos = resultados.filter(
+      (resultado) => resultado.status === 'rejected',
+    ).length;
+
+    if (fallos > 0) {
+      this.logger.warn(
+        `Al apagar no se pudieron guardar ${fallos} de ${pendientes.length} documento(s).`,
+      );
+    } else if (pendientes.length > 0) {
+      this.logger.log(
+        `Al apagar se guardaron ${pendientes.length} documento(s).`,
+      );
+    }
   }
 
   /** Carga el doc desde la base la primera vez, o crea uno vacío. */

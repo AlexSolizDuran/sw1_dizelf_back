@@ -3,16 +3,22 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
+import { origenPermitido } from './common/http/origenes';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);
 
+  // Necesario para que Nest ejecute `onModuleDestroy` al recibir SIGTERM: en
+  // Render cada deploy reinicia el proceso y el gateway de sync tiene que
+  // alcanzar a persistir el documento antes de cerrar.
+  app.enableShutdownHooks();
+
   const configService = app.get(ConfigService);
   const port = configService.get<number>('app.port', 3000);
-  const frontendUrls = configService.get<string[]>('app.frontendUrls', [
-    'http://localhost:5173',
-  ]) ?? ['http://localhost:5173'];
+  const frontendUrls = configService.get<string[]>('app.frontendUrls') ?? [
+    'http://localhost:3000',
+  ];
 
   // Middleware para lectura y gestión de cookies seguras (httpOnly para JWT)
   app.use(cookieParser());
@@ -37,13 +43,9 @@ async function bootstrap() {
       origen: string | undefined,
       callback: (error: Error | null, permitir?: boolean) => void,
     ) => {
-      // Permite clientes sin Origin (curl, Postman, health checks).
-      if (!origen) {
-        callback(null, true);
-        return;
-      }
-      const origenNormalizado = origen.replace(/\/$/, '');
-      if (frontendUrls.includes(origenNormalizado)) {
+      // Permite clientes sin Origin (curl, Postman, health checks y la app
+      // nativa) y valida el resto contra la misma lista que usan los gateways.
+      if (origenPermitido(origen, frontendUrls)) {
         callback(null, true);
       } else {
         logger.warn(

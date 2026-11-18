@@ -14,6 +14,12 @@ export interface AppConfig {
   frontendUrl: string;
   frontendUrls: string[];
   cookieSecure: boolean;
+  /** Push de la app móvil (Expo). Deshabilitado por defecto. */
+  pushEnabled: boolean;
+  expoAccessToken: string;
+  pushTimeoutMs: number;
+  /** Ventana antiduplicados por proyecto+usuario, en segundos. */
+  pushThrottleSegundos: number;
 }
 
 /**
@@ -48,5 +54,14 @@ export default registerAs('app', (): AppConfig => {
     frontendUrl: frontendUrls[0] || 'http://localhost:3000',
     frontendUrls,
     cookieSecure: process.env.COOKIE_SECURE === 'true',
+    // Apagado por defecto: sin token de Expo el envío funciona, pero conviene
+    // activarlo explícitamente cuando la app móvil ya está publicada.
+    pushEnabled: process.env.PUSH_ENABLED === 'true',
+    expoAccessToken: process.env.EXPO_ACCESS_TOKEN || '',
+    pushTimeoutMs: parseInt(process.env.PUSH_TIMEOUT_MS || '4000', 10),
+    pushThrottleSegundos: parseInt(
+      process.env.PUSH_THROTTLE_SEGUNDOS || '60',
+      10,
+    ),
   };
 });

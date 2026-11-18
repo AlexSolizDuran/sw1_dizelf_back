@@ -46,6 +46,7 @@ type ProyectoListaBase = {
   id: string;
   nombre: string;
   creadorId: number;
+  modeloAr: { proyectoId: string } | null;
 };
 
 @Injectable()
@@ -118,6 +119,8 @@ export class ProyectosService {
             where: { usuarioId },
             select: { permiso: { select: { nombre: true } } },
           },
+          // Solo la existencia: la clave y el tamaño no hacen falta en la lista.
+          modeloAr: { select: { proyectoId: true } },
           _count: { select: { colaboradores: true } },
         },
       }),
@@ -535,6 +538,7 @@ export class ProyectosService {
       miRol: miembro.rol,
       totalColaboradores,
       puedeEditar: miembro.puedeEditar,
+      tieneModelo: proyecto.modeloAr !== null,
     };
   }
 

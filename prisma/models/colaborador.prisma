@@ -10,5 +10,8 @@ model Colaborador {
 
   // Impide invitar dos veces al mismo usuario al mismo proyecto.
   @@unique([proyectoId, usuarioId])
+  // Listado "proyectos donde colaboro": sin este índice es un scan completo
+  // de la tabla en cada carga del dashboard.
+  @@index([usuarioId])
   @@map("colaborador")
 }

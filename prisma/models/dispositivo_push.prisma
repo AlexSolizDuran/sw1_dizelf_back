@@ -1,0 +1,33 @@
+/// Tokens de push de la app móvil.
+///
+/// Un usuario puede tener varios dispositivos (celular personal, tablet) y un
+/// mismo dispositivo puede cambiar de cuenta. Por eso el token es único a nivel
+/// global y se reasigna al usuario que inicia sesión, mientras que
+/// `dispositivo_id` identifica la instalación para poder reemplazar el token
+/// cuando Expo lo rota sin dejar filas viejas.
+///
+/// El token NO es un secreto de larga vida: expo-notifications puede rotarlo y
+/// el backend lo reemplaza en el próximo registro. Si Expo responde
+/// `DeviceNotRegistered`, la fila se borra.
+model DispositivoPush {
+  id String @id @default(uuid()) @db.Uuid
+
+  usuarioId Int     @map("usuario_id")
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  /// UUID estable por instalación, generado por la app y guardado en SecureStore.
+  dispositivoId String @map("dispositivo_id") @db.VarChar(64)
+
+  /// ExponentPushToken[...] / ExpoPushToken[...]
+  token String @unique @db.VarChar(200)
+
+  /// "android" | "ios"
+  plataforma String @db.VarChar(10)
+
+  creadoEn      DateTime @default(now()) @map("creado_en") @db.Timestamp(3)
+  actualizadoEn DateTime @updatedAt @map("actualizado_en") @db.Timestamp(3)
+
+  @@unique([usuarioId, dispositivoId])
+  @@index([usuarioId])
+  @@map("dispositivo_push")
+}

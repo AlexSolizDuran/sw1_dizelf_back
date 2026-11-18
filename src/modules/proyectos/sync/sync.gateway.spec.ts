@@ -191,6 +191,89 @@ describe('Sembrado del documento', () => {
 });
 
 /**
+ * Apagado del proceso.
+ *
+ * En Render cada deploy manda SIGTERM. Antes el gateway lanzaba los guardados
+ * con `void` y el proceso podía morir antes de que el último autosave llegara a
+ * la base; el usuario perdía los últimos cambios del plano.
+ */
+describe('SyncGateway — apagado', () => {
+  interface SesionPrueba {
+    doc: Y.Doc;
+    refCount: number;
+    timer: ReturnType<typeof setTimeout> | null;
+    sucio: boolean;
+    epoch: number;
+  }
+
+  const crearGateway = (guardar: jest.Mock) => {
+    const gateway = new SyncGateway(
+      {} as never,
+      {} as never,
+      { guardarMaterializado: guardar } as never,
+    );
+
+    return gateway as unknown as {
+      sesiones: Map<string, SesionPrueba>;
+      onModuleDestroy: () => Promise<void>;
+    };
+  };
+
+  it('espera a que se persista cada documento antes de terminar', async () => {
+    let terminar!: () => void;
+    const guardado = new Promise<void>((resolver) => {
+      terminar = resolver;
+    });
+    const guardar = jest.fn(() => guardado);
+    const gateway = crearGateway(guardar);
+    const doc = new Y.Doc();
+
+    gateway.sesiones.set('p1', {
+      doc,
+      refCount: 0,
+      timer: null,
+      sucio: true,
+      epoch: 0,
+    });
+
+    let apagado = false;
+    const promesa = gateway.onModuleDestroy().then(() => {
+      apagado = true;
+    });
+
+    await Promise.resolve();
+    expect(apagado).toBe(false);
+    expect(guardar).toHaveBeenCalledWith('p1', doc);
+
+    terminar();
+    await promesa;
+    expect(apagado).toBe(true);
+  });
+
+  it('guarda el resto aunque uno de los documentos falle', async () => {
+    const guardar = jest.fn((proyectoId: string) =>
+      proyectoId === 'roto'
+        ? Promise.reject(new Error('base caída'))
+        : Promise.resolve(),
+    );
+    const gateway = crearGateway(guardar);
+
+    for (const proyectoId of ['ok-1', 'roto', 'ok-2']) {
+      gateway.sesiones.set(proyectoId, {
+        doc: new Y.Doc(),
+        refCount: 0,
+        timer: null,
+        sucio: true,
+        epoch: 0,
+      });
+    }
+
+    await expect(gateway.onModuleDestroy()).resolves.toBeUndefined();
+    expect(guardar).toHaveBeenCalledTimes(3);
+  });
+});
+
+/**
  * Autenticación del handshake.
  *
  * En producción la cookie de sesión ya no llega al backend (el login pasa por
@@ -219,7 +302,10 @@ describe('SyncGateway — autenticación del handshake', () => {
         }),
       ),
     };
-    const documento = { leer: jest.fn(() => Promise.resolve(null)) };
+    const documento = {
+      leer: jest.fn(() => Promise.resolve(null)),
+      guardarMaterializado: jest.fn(() => Promise.resolve()),
+    };
 
     const gateway = new SyncGateway(
       tokenVerificador as never,

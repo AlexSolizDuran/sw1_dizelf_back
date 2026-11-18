@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { RequiereCapacidad } from '../../../common/decorators/capacidad-proyecto.decorator';
+import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import { ProyectoRolGuard } from '../../../common/guards/proyecto-rol.guard';
 import { ConfirmarModeloDto } from '../dto/modelo-ar/confirmar-modelo.dto';
 import { MetaModeloDto } from '../dto/modelo-ar/meta-modelo.dto';
@@ -55,9 +56,10 @@ export class ModeloArController {
   @RequiereCapacidad('editar')
   confirmar(
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('sub') actorId: number,
     @Body() dto: ConfirmarModeloDto,
   ): Promise<MetaModeloDto> {
-    return this.modeloAr.confirmar(id, dto);
+    return this.modeloAr.confirmar(id, actorId, dto);
   }
 
   /**

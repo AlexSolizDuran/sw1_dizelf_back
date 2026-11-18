@@ -254,7 +254,7 @@ export class AuthService {
    * por los navegadores para cookies cross-site.
    */
   private establecerCookieAuth(res: Response, token: string): void {
-    const opciones = this.obtenerOpcionesCookie();
+    const opciones = this.obtenerOpcionesCookie(token);
 
     res.cookie(this.cookieName, token, opciones);
     // Transición: mantiene la cookie anterior para no invalidar sesiones activas.
@@ -286,7 +286,7 @@ export class AuthService {
    * exactamente el mismo sameSite/secure/path (si difieren, el navegador
    * no elimina ni reenvía la cookie y el F5 parece "sacar" al usuario).
    */
-  private obtenerOpcionesCookie(): {
+  private obtenerOpcionesCookie(token?: string): {
     httpOnly: boolean;
     secure: boolean;
     sameSite: 'lax' | 'none';
@@ -303,8 +303,28 @@ export class AuthService {
       // SameSite=None exige Secure; en http local debe ser Lax sin Secure.
       secure: cookieSegura,
       sameSite: cookieSegura ? 'none' : 'lax',
-      maxAge: 24 * 60 * 60 * 1000, // 24 horas, alineado con JWT_EXPIRACION=1d
+      // La cookie dura exactamente lo que el JWT. Con `JWT_EXPIRACION=12h` el
+      // valor fijo de 24 h dejaba una cookie que el servidor rechazaba y el
+      // usuario veía un logout silencioso a mitad de jornada.
+      maxAge: this.vigenciaCookieMs(token),
       path: '/',
     };
+  }
+
+  /**
+   * Vigencia de la cookie derivada de `exp` del token recién firmado.
+   *
+   * `decode` no verifica la firma (no hace falta: el token lo acabamos de
+   * firmar) y no lanza con un token bien formado. Si algo no se puede leer, se
+   * usa el default histórico de 24 h.
+   */
+  private vigenciaCookieMs(token?: string): number {
+    const vigenciaPorDefecto = 24 * 60 * 60 * 1000;
+    if (!token) return vigenciaPorDefecto;
+
+    const payload = this.jwtService.decode<{ exp?: number } | null>(token);
+    if (!payload?.exp) return vigenciaPorDefecto;
+
+    return Math.max(0, payload.exp * 1000 - Date.now());
   }
 }

@@ -10,6 +10,7 @@ jest.mock('@nestjs/jwt', () => {
     JwtService: class MockJwtService {
       signAsync = jest.fn();
       verifyAsync = jest.fn();
+      decode = jest.fn();
     },
   };
 });
@@ -48,6 +49,7 @@ describe('AuthService', () => {
 
     const jwtServiceMock = {
       signAsync: jest.fn(),
+      decode: jest.fn().mockReturnValue(null),
     } as unknown as jest.Mocked<JwtService>;
 
     const configServiceMock = {
@@ -225,6 +227,33 @@ describe('AuthService', () => {
       );
       expect(mockResponse.cookie).toHaveBeenCalled();
       expect(result.usuario.id).toBe(1);
+    });
+
+    it('ajusta el maxAge de la cookie a la vigencia real del token', async () => {
+      usuariosService.buscarPorUsernameParaAutenticacion.mockResolvedValue(
+        fakeUser,
+      );
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+      jwtService.signAsync.mockResolvedValue('token_1h');
+      jwtService.decode.mockReturnValue({
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      });
+
+      await service.login(
+        { identificador: 'carlosg', password: 'Password123!' },
+        mockResponse as Response,
+      );
+
+      const llamada = (mockResponse.cookie as jest.Mock).mock.calls[0] as [
+        string,
+        string,
+        { maxAge: number },
+      ];
+      const opciones = llamada[2];
+
+      expect(jwtService.decode).toHaveBeenCalledWith('token_1h');
+      expect(opciones.maxAge).toBeGreaterThan(3_590_000);
+      expect(opciones.maxAge).toBeLessThanOrEqual(3_600_000);
     });
 
     it('debe iniciar sesión exitosamente cuando se proporciona un email', async () => {

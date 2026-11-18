@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TokenVerificadorService } from '../../../common/auth/token-verificador.service';
 import { ProyectoRolGuard } from '../../../common/guards/proyecto-rol.guard';
 import { AuthModule } from '../../auth/auth.module';
+import { NotificacionesModule } from '../../notificaciones/notificaciones.module';
 import { ColaboradoresController } from '../controller/colaboradores.controller';
 import { ModeloArController } from '../controller/modelo-ar.controller';
 import { ProyectosController } from '../controller/proyectos.controller';
@@ -23,7 +24,7 @@ import { ProyectosService } from '../service/proyectos.service';
    *
    * No hay ciclo: `AuthModule` importa `UsuariosModule`, no este.
    */
-  imports: [AuthModule],
+  imports: [AuthModule, NotificacionesModule],
   controllers: [
     ProyectosController,
     ColaboradoresController,

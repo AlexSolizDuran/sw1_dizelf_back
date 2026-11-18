@@ -1,3 +1,9 @@
+// `@nestjs/config` publica ESM y Jest corre CJS; el servicio de notificaciones
+// lo importa de forma transitiva.
+jest.mock('@nestjs/config', () => ({
+  ConfigService: class MockConfigService {},
+}));
+
 import {
   BadRequestException,
   NotFoundException,
@@ -6,6 +12,7 @@ import {
 import { Test, TestingModule } from '@nestjs/testing';
 import { ALMACEN_OBJETOS } from '../../../common/storage/almacen-objetos.token';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { NotificacionesService } from '../../notificaciones/service/notificaciones.service';
 import { ModeloArService, LIMITE_BYTES_MODELO } from './modelo-ar.service';
 
 const PROYECTO = '11111111-1111-4111-8111-111111111111';
@@ -28,17 +35,23 @@ const almacenMock = {
   borrar: jest.fn(),
 };
 
+const notificacionesMock = {
+  avisarModeloPublicado: jest.fn(),
+};
+
 describe('ModeloArService', () => {
   let servicio: ModeloArService;
 
   beforeEach(async () => {
     jest.resetAllMocks();
+    notificacionesMock.avisarModeloPublicado.mockResolvedValue(undefined);
 
     const modulo: TestingModule = await Test.createTestingModule({
       providers: [
         ModeloArService,
         { provide: PrismaService, useValue: prismaMock },
         { provide: ALMACEN_OBJETOS, useValue: almacenMock },
+        { provide: NotificacionesService, useValue: notificacionesMock },
       ],
     }).compile();
 
@@ -66,7 +79,7 @@ describe('ModeloArService', () => {
   describe('confirmar', () => {
     it('rechaza una clave de otro proyecto sin tocar el bucket', async () => {
       await expect(
-        servicio.confirmar(PROYECTO, {
+        servicio.confirmar(PROYECTO, 7, {
           clave: CLAVE.replace(PROYECTO, OTRO_PROYECTO),
         }),
       ).rejects.toBeInstanceOf(BadRequestException);
@@ -78,7 +91,7 @@ describe('ModeloArService', () => {
       almacenMock.cabeza.mockResolvedValue(null);
 
       await expect(
-        servicio.confirmar(PROYECTO, { clave: CLAVE }),
+        servicio.confirmar(PROYECTO, 7, { clave: CLAVE }),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
@@ -90,7 +103,7 @@ describe('ModeloArService', () => {
       almacenMock.primerosBytes.mockResolvedValue(Buffer.from('<htm'));
 
       await expect(
-        servicio.confirmar(PROYECTO, { clave: CLAVE }),
+        servicio.confirmar(PROYECTO, 7, { clave: CLAVE }),
       ).rejects.toBeInstanceOf(BadRequestException);
 
       expect(almacenMock.borrar).toHaveBeenCalledWith(CLAVE);
@@ -104,7 +117,7 @@ describe('ModeloArService', () => {
       });
 
       await expect(
-        servicio.confirmar(PROYECTO, { clave: CLAVE }),
+        servicio.confirmar(PROYECTO, 7, { clave: CLAVE }),
       ).rejects.toBeInstanceOf(PayloadTooLargeException);
 
       expect(almacenMock.borrar).toHaveBeenCalledWith(CLAVE);
@@ -126,7 +139,7 @@ describe('ModeloArService', () => {
         actualizado: new Date('2026-11-17T12:00:00.000Z'),
       });
 
-      const meta = await servicio.confirmar(PROYECTO, { clave: CLAVE });
+      const meta = await servicio.confirmar(PROYECTO, 7, { clave: CLAVE });
 
       expect(meta).toEqual({
         hay: true,
@@ -150,6 +163,56 @@ describe('ModeloArService', () => {
       expect(argumentos.create.version).toBe(1);
       expect(argumentos.update.version).toEqual({ increment: 1 });
       expect(almacenMock.borrar).toHaveBeenCalledWith(CLAVE_ANTERIOR);
+      expect(notificacionesMock.avisarModeloPublicado).toHaveBeenCalledWith({
+        proyectoId: PROYECTO,
+        actorId: 7,
+        version: 3,
+        tipo: 'actualizado',
+      });
+    });
+
+    it('avisa como creado la primera publicación', async () => {
+      almacenMock.cabeza.mockResolvedValue({
+        bytes: 1024,
+        contentType: 'model/gltf-binary',
+      });
+      almacenMock.primerosBytes.mockResolvedValue(Buffer.from('glTF'));
+      prismaMock.modeloAr.findUnique.mockResolvedValue(null);
+      prismaMock.modeloAr.upsert.mockResolvedValue({
+        version: 1,
+        bytes: 1024,
+        actualizado: new Date('2026-11-17T12:00:00.000Z'),
+      });
+
+      await servicio.confirmar(PROYECTO, 7, { clave: CLAVE });
+
+      expect(notificacionesMock.avisarModeloPublicado).toHaveBeenCalledWith({
+        proyectoId: PROYECTO,
+        actorId: 7,
+        version: 1,
+        tipo: 'creado',
+      });
+    });
+
+    it('publica aunque el aviso de push falle', async () => {
+      almacenMock.cabeza.mockResolvedValue({
+        bytes: 1024,
+        contentType: 'model/gltf-binary',
+      });
+      almacenMock.primerosBytes.mockResolvedValue(Buffer.from('glTF'));
+      prismaMock.modeloAr.findUnique.mockResolvedValue(null);
+      prismaMock.modeloAr.upsert.mockResolvedValue({
+        version: 1,
+        bytes: 1024,
+        actualizado: new Date('2026-11-17T12:00:00.000Z'),
+      });
+      notificacionesMock.avisarModeloPublicado.mockRejectedValue(
+        new Error('Expo caído'),
+      );
+
+      await expect(
+        servicio.confirmar(PROYECTO, 7, { clave: CLAVE }),
+      ).resolves.toMatchObject({ version: 1 });
     });
 
     it('no se cae si el borrado del anterior falla', async () => {
@@ -169,7 +232,7 @@ describe('ModeloArService', () => {
       almacenMock.borrar.mockRejectedValue(new Error('S3 caído'));
 
       await expect(
-        servicio.confirmar(PROYECTO, { clave: CLAVE }),
+        servicio.confirmar(PROYECTO, 7, { clave: CLAVE }),
       ).resolves.toMatchObject({ version: 2 });
     });
   });

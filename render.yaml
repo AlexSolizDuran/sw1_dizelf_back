@@ -34,8 +34,9 @@ services:
     # No uses `npm start` (ejecuta `nest start`, que es devDependency).
     startCommand: npm run start:prod
 
-    # GET / está marcado @Public() y responde "Hello World!".
-    healthCheckPath: /
+    # `/health` no toca la base: si Neon está lento, Render no reinicia la API.
+    # La disponibilidad real de la base se consulta en `/health/ready`.
+    healthCheckPath: /health
 
     # Seed idempotente (EDITOR/LECTOR). Corre una sola vez, tras el primer
     # deploy exitoso.
@@ -59,5 +60,16 @@ services:
         sync: false
       - key: FRONTEND_URL # https://tu-front.vercel.app, sin '/' final
         sync: false
+
+      # Push de la app móvil (Expo). Sin EXPO_ACCESS_TOKEN también funciona,
+      # pero Expo limita más los envíos anónimos.
+      - key: PUSH_ENABLED
+        value: "true"
+      - key: EXPO_ACCESS_TOKEN
+        sync: false
+      - key: PUSH_TIMEOUT_MS
+        value: "4000"
+      - key: PUSH_THROTTLE_SEGUNDOS
+        value: "60"
 
       # PORT lo inyecta Render; no lo declares.
