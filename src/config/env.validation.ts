@@ -39,6 +39,10 @@ export const envValidationSchema = Joi.object({
   EXPO_ACCESS_TOKEN: Joi.string().allow('').optional(),
   PUSH_TIMEOUT_MS: Joi.number().min(500).max(15000).default(4000),
   PUSH_THROTTLE_SEGUNDOS: Joi.number().min(0).max(3600).default(60),
+  // Rate limit general (por usuario/email e IP). Los endpoints de auth y de
+  // consumo IA tienen límites propios más estrictos en sus controladores.
+  THROTTLE_TTL_MS: Joi.number().min(1000).max(3_600_000).default(60_000),
+  THROTTLE_LIMIT: Joi.number().min(1).max(10_000).default(100),
   // Object Storage (GLB de AR). Opcionales: sin ellas la API arranca y solo los
   // endpoints de modelo responden 503 (ver StorageConfig).
   MODELOS_BUCKET: Joi.string().default('modelos-ar'),

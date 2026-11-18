@@ -7,6 +7,7 @@ import {
   Post,
   Res,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
@@ -18,6 +19,16 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { TokenMovilDto } from './dto/token-movil.dto';
 import type { JwtPayload } from './interfaces/jwt-payload.interface';
+
+/**
+ * Fuerza bruta de credenciales: 5 intentos por minuto y por email.
+ *
+ * La clave la arma `rastrearSolicitud`: en estas rutas públicas todavía no hay
+ * usuario, así que usa el email del cuerpo (y la IP solo si no viene). Detrás
+ * del proxy de Vercel la IP es compartida, por eso no sirve como clave única.
+ */
+const LIMITE_INTENTOS_AUTH = 5;
+const VENTANA_INTENTOS_AUTH_MS = 60_000;
 
 /**
  * Controlador de Autenticación.
@@ -37,6 +48,12 @@ export class AuthController {
    * y responde con el perfil creado y la cookie de sesión httpOnly.
    */
   @Public()
+  @Throttle({
+    default: {
+      limit: LIMITE_INTENTOS_AUTH,
+      ttl: VENTANA_INTENTOS_AUTH_MS,
+    },
+  })
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
   async register(
@@ -51,6 +68,12 @@ export class AuthController {
    * Valida credenciales, genera el token JWT y lo inyecta en una cookie httpOnly.
    */
   @Public()
+  @Throttle({
+    default: {
+      limit: LIMITE_INTENTOS_AUTH,
+      ttl: VENTANA_INTENTOS_AUTH_MS,
+    },
+  })
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(
@@ -68,6 +91,12 @@ export class AuthController {
    * del WebView lo dejaría en logs y en el historial.
    */
   @Public()
+  @Throttle({
+    default: {
+      limit: LIMITE_INTENTOS_AUTH,
+      ttl: VENTANA_INTENTOS_AUTH_MS,
+    },
+  })
   @Post('token')
   @HttpCode(HttpStatus.OK)
   async tokenMovil(@Body() dto: LoginDto): Promise<TokenMovilDto> {

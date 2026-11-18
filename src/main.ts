@@ -1,13 +1,14 @@
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { origenPermitido } from './common/http/origenes';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // Necesario para que Nest ejecute `onModuleDestroy` al recibir SIGTERM: en
   // Render cada deploy reinicia el proceso y el gateway de sync tiene que
@@ -19,6 +20,12 @@ async function bootstrap() {
   const frontendUrls = configService.get<string[]>('app.frontendUrls') ?? [
     'http://localhost:3000',
   ];
+
+  // En Render (y detrás del proxy de Vercel) la IP real del cliente no es la
+  // del socket. Sin esto el rate limit vería la IP del proxy para todos.
+  // `1` = confiar solo en el salto inmediato, así un X-Forwarded-For enviado a
+  // mano por el cliente no puede falsear la clave.
+  app.set('trust proxy', 1);
 
   // Middleware para lectura y gestión de cookies seguras (httpOnly para JWT)
   app.use(cookieParser());

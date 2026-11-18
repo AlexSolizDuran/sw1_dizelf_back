@@ -1,7 +1,11 @@
 import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { AppService, type ReadinessDto, type SaludDto } from './app.service';
 import { Public } from './common/decorators/public.decorator';
 
+// Health y raíz quedan fuera del rate limit: Render los consulta cada pocos
+// segundos y un 429 acá haría que reinicie el servicio.
+@SkipThrottle()
 @Controller()
 export class AppController {
   constructor(private readonly appService: AppService) {}

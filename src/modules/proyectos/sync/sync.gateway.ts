@@ -51,6 +51,26 @@ const estadoDe = (socket: Socket): EstadoSocket | undefined =>
   datos(socket).estado;
 
 /**
+ * Tope por update de Yjs. Un update normal (mover un mueble, editar un muro)
+ * pesa unos pocos KB; 512 KB ya es una escena entera reescrita de golpe.
+ *
+ * El límite vive en la aplicación y no en `maxHttpBufferSize` de socket.io a
+ * propósito: así el cliente recibe un `sync:error` que puede mostrar, en vez de
+ * un cierre de transporte sin explicación.
+ */
+export const MAX_UPDATE_BYTES = 512 * 1024;
+
+/** Normaliza el payload a bytes sin copiarlo, o `null` si no es binario. */
+function bytesDelUpdate(update: unknown): Uint8Array | null {
+  if (update instanceof Uint8Array) return update;
+  if (update instanceof ArrayBuffer) return new Uint8Array(update);
+  if (ArrayBuffer.isView(update)) {
+    return new Uint8Array(update.buffer, update.byteOffset, update.byteLength);
+  }
+  return null;
+}
+
+/**
  * Gateway de sincronización del plano.
  *
  * Es el servidor Yjs estándar: mantiene el documento autoritativo en memoria por
@@ -217,7 +237,7 @@ export class SyncGateway
   @SubscribeMessage('sync:update')
   async recibirUpdate(
     @ConnectedSocket() socket: Socket,
-    @MessageBody() update: ArrayBuffer | Uint8Array,
+    @MessageBody() update: unknown,
   ): Promise<void> {
     const estado = estadoDe(socket);
     if (!estado || !estado.puedeEditar) return;
@@ -230,6 +250,32 @@ export class SyncGateway
     // restaurado. Se descarta: el cliente ya recibió el `sync:inicial` nuevo y
     // en cuanto lo confirme con `sync:listo` vuelve a operar.
     if (estado.epoch !== sesion.epoch) return;
+
+    // Se valida forma y tamaño ANTES de tocar Yjs o la base: el objetivo es
+    // que un cliente no pueda reservar memoria enorme ni hacer un `applyUpdate`
+    // con basura. Un update legítimo nunca se acerca a este tope.
+    const bytes = bytesDelUpdate(update);
+    if (!bytes) {
+      socket.emit('sync:error', {
+        codigo: 'UPDATE_INVALIDO',
+        mensaje: 'El cambio no tiene un formato válido.',
+      });
+      socket.disconnect(true);
+      return;
+    }
+
+    if (bytes.byteLength > MAX_UPDATE_BYTES) {
+      this.logger.warn(
+        `Sync: update de ${bytes.byteLength} bytes rechazado (máximo ${MAX_UPDATE_BYTES}) ` +
+          `de usuario ${estado.usuarioId} en ${estado.proyectoId}.`,
+      );
+      socket.emit('sync:error', {
+        codigo: 'UPDATE_DEMASIADO_GRANDE',
+        mensaje: `El cambio supera el máximo de ${MAX_UPDATE_BYTES / 1024} KB.`,
+      });
+      socket.disconnect(true);
+      return;
+    }
 
     // Revalidación por mensaje: el permiso pudo cambiar desde que conectó.
     const actual = await this.membresia.resolver(
@@ -255,8 +301,6 @@ export class SyncGateway
       return;
     }
 
-    const bytes =
-      update instanceof Uint8Array ? update : new Uint8Array(update);
     Y.applyUpdate(sesion.doc, bytes, socket.id);
 
     // Reenvío a los demás: el emisor ya lo tiene aplicado en local.

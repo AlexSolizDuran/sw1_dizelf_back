@@ -20,6 +20,9 @@ export interface AppConfig {
   pushTimeoutMs: number;
   /** Ventana antiduplicados por proyecto+usuario, en segundos. */
   pushThrottleSegundos: number;
+  /** Rate limit general: ventana en ms y pedidos permitidos por clave. */
+  throttleTtlMs: number;
+  throttleLimit: number;
 }
 
 /**
@@ -63,5 +66,7 @@ export default registerAs('app', (): AppConfig => {
       process.env.PUSH_THROTTLE_SEGUNDOS || '60',
       10,
     ),
+    throttleTtlMs: parseInt(process.env.THROTTLE_TTL_MS || '60000', 10),
+    throttleLimit: parseInt(process.env.THROTTLE_LIMIT || '100', 10),
   };
 });

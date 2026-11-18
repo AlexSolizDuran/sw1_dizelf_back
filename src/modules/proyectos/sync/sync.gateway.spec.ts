@@ -2,7 +2,7 @@
 import * as Y from 'yjs';
 import type { Socket } from 'socket.io';
 import { sembrarDocumento, type EscenaPlana } from './documento-yjs';
-import { SyncGateway } from './sync.gateway';
+import { MAX_UPDATE_BYTES, SyncGateway } from './sync.gateway';
 
 // `@nestjs/config` publica ESM y Jest corre CJS: el gateway lo importa de forma
 // transitiva vía `TokenVerificadorService`. El gateway de este test recibe un
@@ -361,5 +361,121 @@ describe('SyncGateway — autenticación del handshake', () => {
       mensaje: 'Sesión no válida.',
     });
     expect(socket.disconnect).toHaveBeenCalledWith(true);
+  });
+});
+
+/**
+ * Tope de payload por update.
+ *
+ * Un update legítimo pesa pocos KB. Uno de cientos de KB no es una edición:
+ * es un cliente roto o malicioso intentando reservar memoria en el proceso
+ * (los documentos de todos los proyectos viven en el mismo heap). El gateway
+ * lo rechaza antes de `Y.applyUpdate` y cierra el socket con un código que el
+ * cliente puede distinguir de una caída de red.
+ */
+describe('SyncGateway — tope de updates', () => {
+  interface SesionPrueba {
+    doc: Y.Doc;
+    refCount: number;
+    timer: ReturnType<typeof setTimeout> | null;
+    sucio: boolean;
+    epoch: number;
+  }
+
+  const crearEntorno = () => {
+    const membresia = {
+      resolver: jest.fn(() =>
+        Promise.resolve({
+          estado: 'MIEMBRO',
+          rol: 'CREADOR',
+          puedeEditar: true,
+        }),
+      ),
+    };
+    const gateway = new SyncGateway(
+      {} as never,
+      membresia as never,
+      { guardarMaterializado: jest.fn(() => Promise.resolve()) } as never,
+    );
+
+    const sesion: SesionPrueba = {
+      doc: new Y.Doc(),
+      refCount: 1,
+      timer: null,
+      sucio: false,
+      epoch: 0,
+    };
+    (
+      gateway as unknown as { sesiones: Map<string, SesionPrueba> }
+    ).sesiones.set('p1', sesion);
+
+    const emitEnSala = jest.fn();
+    const socket = {
+      id: 'socket-1',
+      data: {
+        estado: {
+          usuarioId: 7,
+          proyectoId: 'p1',
+          rol: 'CREADOR',
+          puedeEditar: true,
+          epoch: 0,
+        },
+      },
+      emit: jest.fn(),
+      disconnect: jest.fn(),
+      to: jest.fn(() => ({ emit: emitEnSala })),
+    } as unknown as Socket & {
+      emit: jest.Mock;
+      disconnect: jest.Mock;
+      to: jest.Mock;
+    };
+
+    return { gateway, socket, sesion, membresia, emitEnSala };
+  };
+
+  it('rechaza y desconecta un update por encima del tope', async () => {
+    const { gateway, socket, sesion, membresia } = crearEntorno();
+
+    await gateway.recibirUpdate(socket, new Uint8Array(MAX_UPDATE_BYTES + 1));
+
+    // No llega ni a revalidar el permiso ni a tocar el documento.
+    expect(membresia.resolver).not.toHaveBeenCalled();
+    expect(socket.emit).toHaveBeenCalledWith('sync:error', {
+      codigo: 'UPDATE_DEMASIADO_GRANDE',
+      mensaje: 'El cambio supera el máximo de 512 KB.',
+    });
+    expect(socket.disconnect).toHaveBeenCalledWith(true);
+    expect(sesion.sucio).toBe(false);
+    expect(socket.to).not.toHaveBeenCalled();
+  });
+
+  it('rechaza un payload que no es binario', async () => {
+    const { gateway, socket } = crearEntorno();
+
+    await gateway.recibirUpdate(socket, { nodes: 'no soy un update' });
+
+    expect(socket.emit).toHaveBeenCalledWith('sync:error', {
+      codigo: 'UPDATE_INVALIDO',
+      mensaje: 'El cambio no tiene un formato válido.',
+    });
+    expect(socket.disconnect).toHaveBeenCalledWith(true);
+  });
+
+  it('aplica y reenvía un update dentro del tope', async () => {
+    const { gateway, socket, sesion, emitEnSala } = crearEntorno();
+    const origen = new Y.Doc();
+    origen.getMap('prueba').set('clave', 'valor');
+    const update = Y.encodeStateAsUpdate(origen);
+
+    await gateway.recibirUpdate(socket, update);
+
+    expect(sesion.doc.getMap('prueba').get('clave')).toBe('valor');
+    expect(sesion.sucio).toBe(true);
+    expect(emitEnSala).toHaveBeenCalledWith('sync:update', update);
+    expect(socket.disconnect).not.toHaveBeenCalled();
+
+    // El autosave queda programado con debounce; se cancela para no dejar un
+    // timer vivo después del test.
+    if (sesion.timer) clearTimeout(sesion.timer);
   });
 });

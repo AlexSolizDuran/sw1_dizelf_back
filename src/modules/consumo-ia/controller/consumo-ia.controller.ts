@@ -7,6 +7,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import {
   RegistroConsumoDto,
@@ -27,6 +28,10 @@ import { ConsumoIaService } from '../service/consumo-ia.service';
 export class ConsumoIaController {
   constructor(private readonly consumoIaService: ConsumoIaService) {}
 
+  // El servidor de Next reporta una vez por llamada a la IA. 20 por minuto y
+  // por usuario alcanza de sobra para un turno normal y frena un cliente que
+  // intente inflar filas de consumo a mano.
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Post()
   @HttpCode(HttpStatus.CREATED)
   registrar(

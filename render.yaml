@@ -61,6 +61,13 @@ services:
       - key: FRONTEND_URL # https://tu-front.vercel.app, sin '/' final
         sync: false
 
+      # Rate limit por usuario/email y endpoint. Auth y consumo IA tienen
+      # límites propios más estrictos en el código.
+      - key: THROTTLE_TTL_MS
+        value: "60000"
+      - key: THROTTLE_LIMIT
+        value: "100"
+
       # Push de la app móvil (Expo). Sin EXPO_ACCESS_TOKEN también funciona,
       # pero Expo limita más los envíos anónimos.
       - key: PUSH_ENABLED

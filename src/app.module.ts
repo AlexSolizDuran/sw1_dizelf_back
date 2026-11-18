@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { CsrfOriginGuard } from './common/guards/csrf-origin.guard';
+import { rastrearSolicitud } from './common/http/throttle-tracker';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { StorageModule } from './common/storage/storage.module';
 import appConfig from './config/env.config';
@@ -23,6 +25,24 @@ import { UsuariosModule } from './modules/usuarios/usuarios.module';
       isGlobal: true,
       load: [appConfig, storageConfig],
       validationSchema: envValidationSchema,
+    }),
+    // Límite general por usuario/email+IP y por endpoint. Los valores salen de
+    // config para poder ajustarlos sin recompilar; los endpoints sensibles
+    // (auth, consumo IA) pisan el límite con `@Throttle`.
+    ThrottlerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        throttlers: [
+          {
+            name: 'default',
+            ttl: config.get<number>('app.throttleTtlMs', 60_000),
+            limit: config.get<number>('app.throttleLimit', 100),
+          },
+        ],
+        getTracker: rastrearSolicitud,
+        errorMessage:
+          'Demasiadas solicitudes. Esperá un momento y volvé a intentar.',
+      }),
     }),
     PrismaModule,
     StorageModule,
@@ -46,6 +66,14 @@ import { UsuariosModule } from './modules/usuarios/usuarios.module';
     {
       provide: APP_GUARD,
       useClass: CsrfOriginGuard,
+    },
+    // Va al final a propósito: necesita que JwtAuthGuard ya haya dejado el
+    // usuario en la petición para contar por usuario (detrás del proxy de
+    // Vercel todos comparten IP), y que CsrfOriginGuard haya descartado las
+    // escrituras de orígenes ajenos para que no consuman cuota.
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
     },
   ],
 })
