@@ -12,7 +12,7 @@ import {
 /** Techo defensivo: un contexto real no llega a este número por llamada. */
 export const MAX_TOKENS_POR_LLAMADA = 2_000_000;
 
-export const ORIGENES_CONSUMO = ['escena', 'ayuda'] as const;
+export const ORIGENES_CONSUMO = ['escena', 'ayuda', 'proyecto'] as const;
 export type OrigenConsumo = (typeof ORIGENES_CONSUMO)[number];
 
 export const PROVEEDORES_CONSUMO = [
@@ -30,7 +30,7 @@ export type ProveedorConsumo = (typeof PROVEEDORES_CONSUMO)[number];
  */
 export class RegistrarConsumoDto {
   @IsIn(ORIGENES_CONSUMO, {
-    message: 'El origen debe ser "escena" o "ayuda".',
+    message: 'El origen debe ser "escena", "ayuda" o "proyecto".',
   })
   origen: OrigenConsumo;
 
