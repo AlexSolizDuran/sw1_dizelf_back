@@ -63,7 +63,7 @@ export class ModeloArController {
   /**
    * Descarga del GLB vigente.
    *
-   * Responde 302 a una URL prefirmada de 60 s: los bytes van del bucket al
+   * Responde 302 a una URL prefirmada de 5 min: los bytes van del bucket al
    * cliente sin gastar el egress ni el ancho de banda del backend. Se marca
    * `no-store` porque la URL caduca; el cliente usa `/meta` para cachear.
    */

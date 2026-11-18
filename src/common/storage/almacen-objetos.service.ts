@@ -102,8 +102,14 @@ export class AlmacenObjetosService {
     );
   }
 
-  /** URL prefirmada de lectura, para redirigir sin mover los bytes por Render. */
-  async urlLectura(clave: string, expiraEnSegundos = 60): Promise<string> {
+  /**
+   * URL prefirmada de lectura, para redirigir sin mover los bytes por Render.
+   *
+   * 5 minutos y no 60 s: el cliente descarga el GLB y después la página lo pide
+   * otra vez (la AR además espera al SLAM). Si el archivo pesa, la firma caduca
+   * antes de que el visor lo pida y el modelo no aparece.
+   */
+  async urlLectura(clave: string, expiraEnSegundos = 300): Promise<string> {
     return getSignedUrl(
       this.obtenerCliente(),
       new GetObjectCommand({ Bucket: this.bucket, Key: clave }),
