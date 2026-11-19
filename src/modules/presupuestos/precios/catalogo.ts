@@ -36,7 +36,6 @@ export const CATALOGO_PRECIOS: Record<string, FichaCatalogo> = {
     nombre: 'Cemento Portland IP-30 (bolsa 50 kg)',
     categoria: 'MAMPOSTERIA',
     unidadBase: 'bolsa',
-    nota: 'Precio de Constructor Bolivia.',
     imagen:
       'https://www.constructorbolivia.com/wp-content/uploads/2021/08/cemento-viacha.png',
     candidatos: [
@@ -55,7 +54,7 @@ export const CATALOGO_PRECIOS: Record<string, FichaCatalogo> = {
     nombre: 'Ladrillo 6 huecos Incerpaz (24x15x10 cm)',
     categoria: 'MAMPOSTERIA',
     unidadBase: 'pza',
-    nota: 'Precio por pieza, no por millar.',
+    nota: 'Por pieza, no por millar.',
     imagen:
       'https://www.constructorbolivia.com/wp-content/uploads/2023/07/Inverpaz-1.png',
     candidatos: [
@@ -74,7 +73,7 @@ export const CATALOGO_PRECIOS: Record<string, FichaCatalogo> = {
     nombre: 'Ladrillo visto 18 huecos Incerpaz',
     categoria: 'MAMPOSTERIA',
     unidadBase: 'pza',
-    nota: 'Precio por pieza, no por millar.',
+    nota: 'Por pieza, no por millar.',
     imagen:
       'https://www.constructorbolivia.com/wp-content/uploads/2025/11/Ladrillo-visto-de-18-huecos.png',
     candidatos: [
@@ -93,7 +92,7 @@ export const CATALOGO_PRECIOS: Record<string, FichaCatalogo> = {
     nombre: 'Acero corrugado 6 mm x 9 m (500S)',
     categoria: 'LOSA',
     unidadBase: 'barra',
-    nota: 'La cantidad depende del cálculo estructural, no del área.',
+    nota: 'Cantidad según cálculo estructural.',
     imagen:
       'https://www.constructorbolivia.com/wp-content/uploads/2021/11/acero-corrugado.jpg',
     candidatos: [
@@ -112,7 +111,6 @@ export const CATALOGO_PRECIOS: Record<string, FichaCatalogo> = {
     nombre: 'Cerradura externa Icsa 110/40 niquelada',
     categoria: 'ABERTURA',
     unidadBase: 'pza',
-    nota: 'Precio de Morales.',
     imagen:
       'https://cdn.shopify.com/s/files/1/0804/3708/4217/files/Disenosintitulo_1.png?v=1784300191',
     candidatos: [
@@ -147,7 +145,7 @@ export const CATALOGO_MANUALES: Record<string, FichaManual> = {
     nombre: 'Puerta interior (hoja + marco)',
     categoria: 'ABERTURA',
     unidadBase: 'pza',
-    nota: 'No hay precio publicado: escribí el de tu proveedor.',
+    nota: 'Precio a mano: escribí el de tu proveedor.',
     imagen: '/materiales/puerta_interior.svg',
   },
   puerta_exterior: {
@@ -155,7 +153,7 @@ export const CATALOGO_MANUALES: Record<string, FichaManual> = {
     nombre: 'Puerta exterior de seguridad',
     categoria: 'ABERTURA',
     unidadBase: 'pza',
-    nota: 'No hay precio publicado: escribí el de tu proveedor.',
+    nota: 'Precio a mano: escribí el de tu proveedor.',
     imagen: '/materiales/puerta_exterior.svg',
   },
   ventana_corrediza: {
@@ -163,7 +161,7 @@ export const CATALOGO_MANUALES: Record<string, FichaManual> = {
     nombre: 'Ventana corrediza de aluminio',
     categoria: 'ABERTURA',
     unidadBase: 'pza',
-    nota: 'El precio depende de la medida: se cotiza por unidad.',
+    nota: 'Precio a mano: según medida.',
     imagen: '/materiales/ventana_corrediza.svg',
   },
   arena_comun: {
@@ -171,7 +169,7 @@ export const CATALOGO_MANUALES: Record<string, FichaManual> = {
     nombre: 'Arena común',
     categoria: 'MAMPOSTERIA',
     unidadBase: 'm3',
-    nota: 'Se vende por volqueta o por m³.',
+    nota: 'Por m³ o volqueta.',
     imagen: '/materiales/arena_comun.svg',
   },
   grava_triturada: {
@@ -179,7 +177,7 @@ export const CATALOGO_MANUALES: Record<string, FichaManual> = {
     nombre: 'Grava triturada',
     categoria: 'HORMIGON',
     unidadBase: 'm3',
-    nota: 'Se vende por m³.',
+    nota: 'Por m³.',
     imagen: '/materiales/grava_triturada.svg',
   },
   alambre_amarre: {
@@ -187,7 +185,7 @@ export const CATALOGO_MANUALES: Record<string, FichaManual> = {
     nombre: 'Alambre de amarre',
     categoria: 'MAMPOSTERIA',
     unidadBase: 'kg',
-    nota: 'Se vende por kilo o por rollo.',
+    nota: 'Por kilo o rollo.',
     imagen: '/materiales/alambre_amarre.svg',
   },
   pintura_latex: {
@@ -195,15 +193,23 @@ export const CATALOGO_MANUALES: Record<string, FichaManual> = {
     nombre: 'Pintura látex para interior',
     categoria: 'ACABADO',
     unidadBase: 'gal',
-    nota: 'Rendimiento típico 8–10 m² por mano y por galón.',
+    nota: 'Rinde 8–10 m² por mano por galón.',
     imagen: '/materiales/pintura_latex.svg',
+  },
+  cielo_raso: {
+    clave: 'cielo_raso',
+    nombre: 'Cielo raso (yeso o placa)',
+    categoria: 'ACABADO',
+    unidadBase: 'm2',
+    nota: 'Sistema por m²: placa, perfilería y masilla.',
+    imagen: '/materiales/cielo_raso.svg',
   },
   ceramica_piso: {
     clave: 'ceramica_piso',
     nombre: 'Cerámica para piso',
     categoria: 'ACABADO',
     unidadBase: 'm2',
-    nota: 'Se vende por caja: pasá el precio a m² antes de escribirlo.',
+    nota: 'Por caja: precio por m².',
     imagen: '/materiales/ceramica_piso.svg',
   },
   porcelanato: {
@@ -211,7 +217,7 @@ export const CATALOGO_MANUALES: Record<string, FichaManual> = {
     nombre: 'Porcelanato',
     categoria: 'ACABADO',
     unidadBase: 'm2',
-    nota: 'Se vende por caja: pasá el precio a m² antes de escribirlo.',
+    nota: 'Por caja: precio por m².',
     imagen: '/materiales/porcelanato.svg',
   },
 };
